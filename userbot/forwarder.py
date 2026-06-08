@@ -389,7 +389,7 @@ async def copy_channel_files(
     album_order: list = []
 
     async def _flush_album(gid):
-        nonlocal copied, failed, skipped
+        nonlocal copied, failed, skipped, duplicates, deleted, non_media, unsupported
         msgs = album_buf.pop(gid, [])
         if gid in album_order:
             album_order.remove(gid)
