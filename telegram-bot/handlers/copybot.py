@@ -144,13 +144,22 @@ class BotProgressNotifier(ProgressNotifier):
             except Exception as e:
                 logger.warning(f"BotNotifier done failed: {e}")
 
+    # Only send a Telegram message for flood waits longer than this threshold.
+    # Short waits (< 60s) are silently absorbed — no spam on Normal/Fast speed.
+    FLOOD_NOTIFY_THRESHOLD = 60
+
     async def flood_wait(self, seconds: int):
-        # Record in bot_data so /status can show a live countdown
+        # Always record in bot_data so /status shows a countdown regardless of size
         if self.bot_data is not None:
             self.bot_data["active_flood_wait"] = {
                 "until":   time.time() + seconds,
                 "seconds": seconds,
             }
+        # Only ping the user for significant waits — small ones are absorbed silently
+        if seconds < self.FLOOD_NOTIFY_THRESHOLD:
+            logger.info("Flood wait %ds — absorbing silently (< %ds threshold)",
+                        seconds, self.FLOOD_NOTIFY_THRESHOLD)
+            return
         m, s = divmod(seconds, 60)
         wait_str = f"{m}m {s}s" if m > 0 else f"{s}s"
         try:
@@ -158,8 +167,7 @@ class BotProgressNotifier(ProgressNotifier):
                 self.chat_id,
                 f"⏳ *Telegram rate limit hit!*\n\n"
                 f"Pausing copy job for `{wait_str}` then resuming automatically.\n"
-                f"_This happens when sending large files too quickly. No action needed._\n\n"
-                f"Use /status to see the countdown.",
+                f"_Use /status to see the countdown._",
                 parse_mode="Markdown",
             )
         except Exception as e:
