@@ -405,6 +405,7 @@ async def copy_channel_files(
             client, dest_entity, msgs,
             dry_run=dry_run_mode,
             caption_replacement=caption_replacement,
+            on_flood_wait=notifier.flood_wait,
         )
         if result == "ok":
             copied += n
@@ -484,6 +485,7 @@ async def copy_channel_files(
                     client, dest_entity, message,
                     dry_run=dry_run_mode,
                     caption_replacement=caption_replacement,
+                    on_flood_wait=notifier.flood_wait,
                 )
                 if result == "ok":
                     copied += 1

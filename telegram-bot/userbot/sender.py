@@ -58,6 +58,7 @@ async def _do_send(
     message,
     dry_run: bool = False,
     caption_replacement: str = "",
+    on_flood_wait=None,
 ) -> str:
     """
     Send a single message to dest WITHOUT forwarding (no "Forwarded from" tag).
@@ -96,6 +97,11 @@ async def _do_send(
             # Always wait — Telegram is telling us to slow down, not to stop.
             wait = fw.seconds + 2
             _warn(f"\n⏳  Flood wait {fw.seconds}s — pausing and retrying…")
+            if on_flood_wait:
+                try:
+                    await on_flood_wait(fw.seconds)
+                except Exception:
+                    pass
             await asyncio.sleep(wait)
 
         except FileReferenceExpiredError:
@@ -138,6 +144,7 @@ async def send_album(
     messages: list,
     dry_run: bool = False,
     caption_replacement: str = "",
+    on_flood_wait=None,
 ) -> str:
     """
     Send a grouped album as a single post.
@@ -182,6 +189,11 @@ async def send_album(
 
         except FloodWaitError as fw:
             _warn(f"\n⏳  Flood wait {fw.seconds}s (album) — pausing and retrying…")
+            if on_flood_wait:
+                try:
+                    await on_flood_wait(fw.seconds)
+                except Exception:
+                    pass
             await asyncio.sleep(fw.seconds + 2)
 
         except FileReferenceExpiredError:

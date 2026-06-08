@@ -93,6 +93,10 @@ class ProgressNotifier:
         except Exception as e:
             logger.warning(f"Notifier: could not send progress message: {e}")
 
+    async def flood_wait(self, seconds: int):
+        """Called when a FloodWaitError occurs. Override to notify the user."""
+        pass
+
     async def done(
         self,
         copied: int,

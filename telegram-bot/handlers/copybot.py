@@ -38,8 +38,8 @@ logger = logging.getLogger(__name__)
 
 _FILTER_CYCLE = ["ALL", "mkv", "mp4", "mkv,mp4", "mkv,mp4,avi"]
 _NOTIFY_CYCLE = [100, 200, 500, 0]
-# (label, delay_seconds) — Turbo pushes as fast as Telegram allows; FloodWait handles limits
-_SPEED_CYCLE  = [("⚡ Turbo (max speed)", 0.0), ("🚀 Fast (0.05s)", 0.05), ("🐢 Normal (0.35s)", 0.35)]
+# (label, delay_seconds) — Safe is the default; avoids Telegram flood waits for large media
+_SPEED_CYCLE  = [("🛡 Safe (2s)", 2.0), ("🐢 Normal (0.35s)", 0.35), ("🚀 Fast (0.05s)", 0.05), ("⚡ Turbo (max)", 0.0)]
 MIN_EDIT_INTERVAL = 5.0
 
 
@@ -143,6 +143,20 @@ class BotProgressNotifier(ProgressNotifier):
                 await self.bot.send_message(self.chat_id, text, parse_mode="Markdown")
             except Exception as e:
                 logger.warning(f"BotNotifier done failed: {e}")
+
+    async def flood_wait(self, seconds: int):
+        m, s = divmod(seconds, 60)
+        wait_str = f"{m}m {s}s" if m > 0 else f"{s}s"
+        try:
+            await self.bot.send_message(
+                self.chat_id,
+                f"⏳ *Telegram rate limit hit!*\n\n"
+                f"Pausing copy job for `{wait_str}` then resuming automatically.\n"
+                f"_This happens when sending large files too quickly. No action needed._",
+                parse_mode="Markdown",
+            )
+        except Exception as e:
+            logger.warning(f"BotNotifier flood_wait notify failed: {e}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
