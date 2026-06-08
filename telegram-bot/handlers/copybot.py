@@ -145,6 +145,12 @@ class BotProgressNotifier(ProgressNotifier):
                 logger.warning(f"BotNotifier done failed: {e}")
 
     async def flood_wait(self, seconds: int):
+        # Record in bot_data so /status can show a live countdown
+        if self.bot_data is not None:
+            self.bot_data["active_flood_wait"] = {
+                "until":   time.time() + seconds,
+                "seconds": seconds,
+            }
         m, s = divmod(seconds, 60)
         wait_str = f"{m}m {s}s" if m > 0 else f"{s}s"
         try:
@@ -152,7 +158,8 @@ class BotProgressNotifier(ProgressNotifier):
                 self.chat_id,
                 f"⏳ *Telegram rate limit hit!*\n\n"
                 f"Pausing copy job for `{wait_str}` then resuming automatically.\n"
-                f"_This happens when sending large files too quickly. No action needed._",
+                f"_This happens when sending large files too quickly. No action needed._\n\n"
+                f"Use /status to see the countdown.",
                 parse_mode="Markdown",
             )
         except Exception as e:
@@ -543,7 +550,7 @@ async def _run_copy(client, src, dst, opts, notifier, bot, chat_id, bot_data):
             skip_text=opts["skip_text"],
             notifier=notifier,
             interactive=False,
-            rate_delay=opts.get("rate_delay", 0.05),
+            rate_delay=opts.get("rate_delay", _SPEED_CYCLE[0][1]),
         )
     except asyncio.CancelledError:
         # Update the progress message to a final state before sending the cancel notice.
@@ -586,6 +593,7 @@ async def _run_copy(client, src, dst, opts, notifier, bot, chat_id, bot_data):
         _ar.clear_resume()
         bot_data["active_copy_task"]  = None
         bot_data["active_status_msg"] = None
+        bot_data.pop("active_flood_wait", None)  # clear any lingering flood-wait state
 
 
 async def _run_sync(client, src, dst, opts, bot, chat_id, bot_data):
@@ -754,10 +762,25 @@ def _build_status_text(bot_data: dict) -> str:
         f = stats.get("failed",  0)
         t = stats.get("total",   0)
         total_note = f" / `{t:,}`" if t else ""
+
+        # Check if a flood wait is currently active
+        flood = bot_data.get("active_flood_wait")
+        flood_line = ""
+        if flood:
+            remaining = int(flood["until"] - time.time())
+            if remaining > 0:
+                fm, fs = divmod(remaining, 60)
+                wait_str = f"{fm}m {fs}s" if fm else f"{fs}s"
+                flood_line = f"\n  ⏳ *Flood wait:* `{wait_str}` remaining — copy paused"
+            else:
+                bot_data.pop("active_flood_wait", None)
+
+        job_label = "⏸ *Copy job paused (flood wait)*" if flood_line else "▶ *Copy job running*"
         lines.append(
-            f"\n▶ *Copy job running*\n"
+            f"\n{job_label}\n"
             f"  ✅ Copied: `{c:,}`{total_note}  "
             f"⏭ Skipped: `{s:,}`  ❌ Failed: `{f:,}`"
+            f"{flood_line}"
         )
     elif sync_hdlr:
         stats = bot_data.get("active_sync_stats", {})
@@ -1462,15 +1485,14 @@ async def _auto_resume_start(application, resume: dict) -> None:
 
     msg_id = notify_msg.message_id if notify_msg else None
 
-    if msg_id:
-        notifier = BotProgressNotifier(
-            bot, chat_id, msg_id,
-            every=opts.get("notify_every", 100),
-            bot_data=bot_data,
-        )
-    else:
-        # No message to edit — fall back to a silent notifier
-        notifier = ProgressNotifier(client, every=opts.get("notify_every", 100))
+    # Always use BotProgressNotifier so flood-wait notifications reach the user.
+    # tick() edits msg_id (and silently fails if msg_id is None); flood_wait()
+    # always sends a NEW message, so it works regardless of msg_id.
+    notifier = BotProgressNotifier(
+        bot, chat_id, msg_id,
+        every=opts.get("notify_every", 100),
+        bot_data=bot_data,
+    )
 
     task = asyncio.create_task(
         _run_copy(client, src, dst, opts, notifier, bot, chat_id, bot_data)
@@ -1495,9 +1517,10 @@ async def schedule_auto_resume(application) -> None:
     )
 
     # Poll until userbot is connected (up to 90 s; bridge typically connects in < 5 s)
-    deadline = asyncio.get_event_loop().time() + 90
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 90
     while not bridge.is_ready(application.bot_data):
-        if asyncio.get_event_loop().time() > deadline:
+        if loop.time() > deadline:
             logger.warning(
                 "Auto-resume: timed out waiting for userbot after 90 s — aborting."
             )
