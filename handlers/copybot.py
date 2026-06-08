@@ -789,10 +789,18 @@ def _build_status_text(bot_data: dict) -> str:
 
     if copy_task and not copy_task.done():
         stats = bot_data.get("active_copy_stats", {})
-        c = stats.get("copied",  0)
-        s = stats.get("skipped", 0)
-        f = stats.get("failed",  0)
-        t = stats.get("total",   0)
+        c          = stats.get("copied",      0)
+        f          = stats.get("failed",      0)
+        t          = stats.get("total",       0)
+        duplicates = stats.get("duplicates",  0)
+        deleted    = stats.get("deleted",     0)
+        non_media  = stats.get("non_media",   0)
+        unsupported= stats.get("unsupported", 0)
+
+        # Progress bar
+        pct    = int(c / t * 100) if t else 0
+        filled = int(10 * pct / 100)
+        bar    = "█" * filled + "░" * (10 - filled)
         total_note = f" / `{t:,}`" if t else ""
 
         # Check if a flood wait is currently active
@@ -807,11 +815,15 @@ def _build_status_text(bot_data: dict) -> str:
             else:
                 bot_data.pop("active_flood_wait", None)
 
-        job_label = "⏸ *Copy job paused (flood wait)*" if flood_line else "▶ *Copy job running*"
+        job_label = "⏸ *Copy job paused (flood wait)*" if flood_line else "▶️ *Copy job running*"
         lines.append(
             f"\n{job_label}\n"
-            f"  ✅ Copied: `{c:,}`{total_note}  "
-            f"⏭ Skipped: `{s:,}`  ❌ Failed: `{f:,}`"
+            f"`[{bar}] {pct}%`\n\n"
+            f"✅ Saved                    : `{c:,}`{total_note}\n"
+            f"♻️ Duplicates skipped       : `{duplicates:,}`\n"
+            f"🗑 Deleted msgs skipped     : `{deleted:,}`\n"
+            f"🚫 Non-media skipped        : `{non_media:,}` (Unsupported: `{unsupported:,}`)\n"
+            f"⚠️ Errors                   : `{f:,}`"
             f"{flood_line}"
         )
     elif sync_hdlr:
