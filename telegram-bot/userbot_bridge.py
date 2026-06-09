@@ -98,7 +98,7 @@ async def _connect_loop(bot_data: dict) -> None:
             # Silently absorb flood waits up to 5 minutes (e.g. during
             # iter_messages GET phase).  Waits longer than this are raised
             # as FloodWaitError so the copy notifier can inform the user.
-            client.flood_sleep_threshold = 5 * 60
+            client.flood_sleep_threshold = 0  # 0 = always raise FloodWaitError so on_flood_wait is called and the counter/display stay accurate
 
             await client.connect()
 
