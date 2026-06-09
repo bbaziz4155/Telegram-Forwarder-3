@@ -12,15 +12,13 @@ import asyncio
 import logging
 import sys
 import time
-from collections import defaultdict
-
 from telethon import TelegramClient
 from telethon.tl.types import Channel, Chat, User
 from tqdm import tqdm
 from colorama import Fore, Style, init as colorama_init
 
 from . import checkpoint as ckpt
-from .sender import send_album, _do_send, ALBUM_FLUSH_DELAY
+from .sender import send_album, _do_send
 from .filter_utils import matches_filter
 from .notifier import ProgressNotifier
 
@@ -101,13 +99,13 @@ async def dry_run(
     source_name = getattr(source_entity, "title", str(source))
     dest_name   = getattr(dest_entity,   "title", str(dest))
 
-    _info(f"\n🔍  DRY RUN — nothing will be sent")
+    _info("\n🔍  DRY RUN — nothing will be sent")
     _info(f"📡  Source      : {source_name}")
     _info(f"📥  Destination : {dest_name}")
     if allowed_exts:
         _info(f"🔎  File filter : {', '.join(sorted(allowed_exts)).upper()} only")
     if skip_text:
-        _info(f"🚫  Text-only msgs: SKIPPED")
+        _info("🚫  Text-only msgs: SKIPPED")
     if caption_replacement:
         _info(f"✏️   Username fix : @... → {caption_replacement}")
 
@@ -328,7 +326,7 @@ async def copy_channel_files(
     if allowed_exts:
         _info(f"🔎  File filter : {', '.join(sorted(allowed_exts)).upper()} only")
     if skip_text:
-        _info(f"🚫  Text-only msgs: SKIPPED")
+        _info("🚫  Text-only msgs: SKIPPED")
     if caption_replacement:
         _info(f"✏️   Username fix : @... → {caption_replacement}")
     if dry_run_mode:
