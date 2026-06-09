@@ -1,5 +1,3 @@
-from telegram.ext import ConversationHandler
-
 # Main menu states
 (
     MAIN_MENU,
