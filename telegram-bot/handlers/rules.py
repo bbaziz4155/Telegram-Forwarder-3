@@ -3,6 +3,14 @@ from telegram.ext import ContextTypes, ConversationHandler
 import database as db
 from states import MAIN_MENU, ADD_RULE_SOURCE, ADD_RULE_DEST, ADD_RULE_CONFIRM, DELETE_RULE_SELECT
 
+
+def _safe(name: str) -> str:
+    """Wrap a channel/chat name in backticks for safe Markdown V1 rendering.
+    Backtick code spans are immune to *, _, [ special-char parsing so any
+    channel name — however exotic — will display correctly."""
+    return "`" + str(name).replace("`", "'") + "`"
+
+
 async def add_rule_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -26,7 +34,6 @@ async def add_rule_source(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Invalid chat ID. Please send a number (e.g. -1001234567890).")
         return ADD_RULE_SOURCE
 
-    # Try to get chat info
     try:
         chat = await context.bot.get_chat(chat_id)
         chat_name = chat.title or chat.username or chat.first_name or str(chat_id)
@@ -37,7 +44,7 @@ async def add_rule_source(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["rule_source_name"] = chat_name
 
     await update.message.reply_text(
-        f"✅ Source chat: *{chat_name}* (`{chat_id}`)\n\n"
+        f"✅ Source chat: {_safe(chat_name)} (`{chat_id}`)\n\n"
         "Step 2/2: Now send me the *destination chat ID* (the chat to forward TO).\n\n"
         "Send the chat ID, or /cancel to go back.",
         parse_mode="Markdown"
@@ -66,8 +73,8 @@ async def add_rule_dest(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         f"📋 *Confirm Forward Rule*\n\n"
-        f"From: *{source_name}* (`{source_id}`)\n"
-        f"To: *{chat_name}* (`{chat_id}`)\n\n"
+        f"From: {_safe(source_name)} (`{source_id}`)\n"
+        f"To: {_safe(chat_name)} (`{chat_id}`)\n\n"
         "Confirm this rule?",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
@@ -104,7 +111,7 @@ async def add_rule_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.edit_message_text(
         f"✅ *Forward rule created!*\n\n"
-        f"Messages from *{source_name}* will now be forwarded to *{dest_name}*.\n\n"
+        f"Messages from {_safe(source_name)} will now be forwarded to {_safe(dest_name)}.\n\n"
         f"Rule ID: `{rule_id}`",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back to Menu", callback_data="menu")]])
@@ -123,9 +130,9 @@ async def list_rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         lines = ["📋 *Active Forward Rules*\n"]
         for r in rules:
-            lines.append(
-                f"• `#{r['id']}` {r['source_chat_name']} → {r['dest_chat_name']}"
-            )
+            src = _safe(r['source_chat_name'])
+            dst = _safe(r['dest_chat_name'])
+            lines.append(f"• `#{r['id']}` {src} → {dst}")
         text = "\n".join(lines)
 
     await query.edit_message_text(
@@ -152,7 +159,10 @@ async def delete_rule_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     buttons = []
     for r in rules:
-        label = f"#{r['id']}: {r['source_chat_name']} → {r['dest_chat_name']}"
+        src = r['source_chat_name'] or str(r['source_chat_id'])
+        dst = r['dest_chat_name'] or str(r['dest_chat_id'])
+        # Button labels are plain text — no parse_mode, no escaping needed
+        label = f"#{r['id']}: {src[:20]} → {dst[:20]}"
         buttons.append([InlineKeyboardButton(label, callback_data=f"del_rule_{r['id']}")])
     buttons.append([InlineKeyboardButton("⬅️ Back", callback_data="menu")])
 
