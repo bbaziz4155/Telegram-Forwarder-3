@@ -51,7 +51,9 @@ def main():
 
     app = build_app(token)
     logger.info("Starting Telegram Forwarder Bot...")
-    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=False)
+    # drop_pending_updates=True: discard commands queued while the bot was
+    # offline so stale messages are never replayed on restart.
+    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 
 if __name__ == "__main__":
