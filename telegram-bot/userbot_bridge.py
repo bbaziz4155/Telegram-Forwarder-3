@@ -95,6 +95,11 @@ async def _connect_loop(bot_data: dict) -> None:
             bot_data["userbot_reason"] = "connecting"
             bot_data.pop("userbot_locked", None)
 
+            # Silently absorb flood waits up to 5 minutes (e.g. during
+            # iter_messages GET phase).  Waits longer than this are raised
+            # as FloodWaitError so the copy notifier can inform the user.
+            client.flood_sleep_threshold = 5 * 60
+
             await client.connect()
 
             if not await client.is_user_authorized():
