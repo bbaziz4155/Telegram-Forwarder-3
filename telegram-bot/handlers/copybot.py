@@ -557,6 +557,7 @@ async def _run_dryrun(client, src, dst, opts, bot, chat_id, msg_id, bot_data):
 async def _run_copy(client, src, dst, opts, notifier, bot, chat_id, bot_data):
     # Seed live-adjustable delay so /speed can read & update it mid-job
     bot_data["active_copy_delay"] = opts.get("rate_delay", _SPEED_CYCLE[0][1])
+    _clear_resume = True   # set False on unexpected exception → keep file for auto-resume
     try:
         await copy_channel_files(
             client, src, dst,
@@ -596,6 +597,7 @@ async def _run_copy(client, src, dst, opts, notifier, bot, chat_id, bot_data):
             except Exception:
                 pass
     except Exception as e:
+        _clear_resume = False  # crash/error — preserve resume file for auto-resume on next start
         logger.exception("Copy job error")
         # Update the progress message so it doesn't stay frozen.
         stats = bot_data.get("active_copy_stats", {})
@@ -613,10 +615,11 @@ async def _run_copy(client, src, dst, opts, notifier, bot, chat_id, bot_data):
         except Exception:
             pass
     finally:
-        # Clear resume file — this runs on normal finish OR user /stopjob cancel.
-        # It does NOT run if the process is killed, which is exactly when we want
-        # the file to survive so the job restarts on the next boot.
-        _ar.clear_resume()
+        # Clear resume file on success or user /stopjob cancel.
+        # On unexpected exceptions we keep it so the job auto-resumes on next boot.
+        # (Does NOT run if the process is killed — the file survives in all kill cases.)
+        if _clear_resume:
+            _ar.clear_resume()
         bot_data["active_copy_task"]  = None
         bot_data["active_status_msg"] = None
         bot_data.pop("active_flood_wait",    None)
@@ -1991,7 +1994,7 @@ async def speed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     status_note = (
         "▶ *Job running* — change takes effect on the very next file."
         if is_running else
-        "U0001f4a4 *No job running* — speed applies to the next /copy."
+        "💤 *No job running* — speed applies to the next /copy."
     )
     await update.message.reply_text(
         f"⚡ *Copy Speed*\n\nCurrent: `{current_label}`\n\n{status_note}",
