@@ -1,5 +1,0 @@
-[phases.install]
-cmds = ["pip install --break-system-packages -r telegram-bot/requirements.txt"]
-
-[start]
-cmd = "cd telegram-bot && python main.py"
