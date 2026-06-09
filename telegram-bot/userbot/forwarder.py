@@ -10,6 +10,7 @@ Bulk copy engine with:
 """
 import asyncio
 import logging
+import sys
 import time
 from collections import defaultdict
 
@@ -123,7 +124,7 @@ async def dry_run(
     current_group = None
     group_msgs: list = []
 
-    pbar = tqdm(total=total, unit="msg", colour="cyan", dynamic_ncols=True)
+    pbar = tqdm(total=total, unit="msg", colour="cyan", dynamic_ncols=True, disable=not sys.stdout.isatty())
     try:
         async for msg in client.iter_messages(source_entity, limit=limit, reverse=True):
             if msg.grouped_id:
