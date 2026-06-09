@@ -41,6 +41,7 @@ _FILTER_CYCLE = ["ALL", "mkv", "mp4", "mkv,mp4", "mkv,mp4,avi"]
 _NOTIFY_CYCLE = [100, 200, 500, 0]
 # (label, delay_seconds) — Safe is the default; avoids Telegram flood waits for large media
 _SPEED_CYCLE  = [("🛡 Safe (2s)", 2.0), ("🐢 Normal (0.35s)", 0.35), ("🚀 Fast (0.05s)", 0.05), ("⚡ Turbo (max)", 0.0)]
+_SPEED_CB    = "speed_set:"
 MIN_EDIT_INTERVAL = 5.0
 
 # /resume inline-button callback IDs
@@ -554,6 +555,8 @@ async def _run_dryrun(client, src, dst, opts, bot, chat_id, msg_id, bot_data):
 
 
 async def _run_copy(client, src, dst, opts, notifier, bot, chat_id, bot_data):
+    # Seed live-adjustable delay so /speed can read & update it mid-job
+    bot_data["active_copy_delay"] = opts.get("rate_delay", _SPEED_CYCLE[0][1])
     try:
         await copy_channel_files(
             client, src, dst,
@@ -563,7 +566,7 @@ async def _run_copy(client, src, dst, opts, notifier, bot, chat_id, bot_data):
             skip_text=opts["skip_text"],
             notifier=notifier,
             interactive=False,
-            rate_delay=opts.get("rate_delay", _SPEED_CYCLE[0][1]),
+            rate_delay=lambda: bot_data.get("active_copy_delay", opts.get("rate_delay", _SPEED_CYCLE[0][1])),
         )
     except asyncio.CancelledError:
         # Edit the progress message to a clear "cancelled" state — do NOT call
@@ -618,6 +621,7 @@ async def _run_copy(client, src, dst, opts, notifier, bot, chat_id, bot_data):
         bot_data["active_status_msg"] = None
         bot_data.pop("active_flood_wait",    None)
         bot_data.pop("active_copy_stats",    None)  # prevent stale stats on next job start
+        bot_data.pop("active_copy_delay",    None)  # clear live speed override
 
 
 async def _run_sync(client, src, dst, opts, bot, chat_id, bot_data):
@@ -1955,6 +1959,87 @@ async def synctest_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+
+# ===============================================================================
+#  /speed — change copy speed mid-job without restarting
+# ===============================================================================
+
+async def speed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    /speed — show a speed-picker keyboard.
+    If a copy job is running the new delay takes effect on the very next
+    message — no restart needed.
+    """
+    bot_data      = context.bot_data
+    copy_task     = bot_data.get("active_copy_task")
+    is_running    = bool(copy_task and not copy_task.done())
+    current_delay = bot_data.get("active_copy_delay")
+    if current_delay is None:
+        current_delay = _SPEED_CYCLE[0][1]
+
+    current_label = next(
+        (lbl for lbl, dly in _SPEED_CYCLE if abs(dly - current_delay) < 0.001),
+        f"{current_delay}s/file",
+    )
+    buttons = [
+        [InlineKeyboardButton(
+            ("✅ " if abs(dly - current_delay) < 0.001 else "") + lbl,
+            callback_data=f"{_SPEED_CB}{dly}",
+        )]
+        for lbl, dly in _SPEED_CYCLE
+    ]
+    status_note = (
+        "▶ *Job running* — change takes effect on the very next file."
+        if is_running else
+        "U0001f4a4 *No job running* — speed applies to the next /copy."
+    )
+    await update.message.reply_text(
+        f"⚡ *Copy Speed*\n\nCurrent: `{current_label}`\n\n{status_note}",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
+
+
+async def speed_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Inline-button handler for /speed picker."""
+    query = update.callback_query
+    await query.answer()
+    try:
+        new_delay = float(query.data[len(_SPEED_CB):])
+    except ValueError:
+        await query.edit_message_text("❌ Invalid speed value.")
+        return
+
+    new_label = next(
+        (lbl for lbl, dly in _SPEED_CYCLE if abs(dly - new_delay) < 0.001),
+        f"{new_delay}s/file",
+    )
+    bot_data   = context.bot_data
+    copy_task  = bot_data.get("active_copy_task")
+    is_running = bool(copy_task and not copy_task.done())
+
+    # Write new delay — copy loop reads this on every next message
+    bot_data["active_copy_delay"] = new_delay
+
+    buttons = [
+        [InlineKeyboardButton(
+            ("✅ " if abs(dly - new_delay) < 0.001 else "") + lbl,
+            callback_data=f"{_SPEED_CB}{dly}",
+        )]
+        for lbl, dly in _SPEED_CYCLE
+    ]
+    effect = (
+        "applied immediately to the running job."
+        if is_running else
+        "will apply to your next /copy job."
+    )
+    await query.edit_message_text(
+        f"⚡ *Speed set to* `{new_label}` — {effect}",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
+
+
 def get_extra_handlers() -> list:
     """Standalone command handlers registered outside the conversation."""
     return [
@@ -1967,6 +2052,7 @@ def get_extra_handlers() -> list:
         CommandHandler("history",       copystats_cmd),
         CommandHandler("clearhistory",  clearhistory_cmd),
         CommandHandler("config",        config_cmd),
+        CommandHandler("speed",         speed_cmd),
         # Bare callback handlers so these buttons work even when the user
         # is NOT inside the main-menu conversation (e.g. from /status output).
         # The conv's MAIN_MENU handlers take priority when the user IS in that
@@ -1976,4 +2062,5 @@ def get_extra_handlers() -> list:
         CallbackQueryHandler(status_callback,       pattern="^status_menu$"),
         CallbackQueryHandler(listchats_callback,    pattern="^listchats_menu$"),
         CallbackQueryHandler(clearhistory_callback, pattern="^clrhist"),
+        CallbackQueryHandler(speed_callback,        pattern=f"^{_SPEED_CB}"),
     ]
