@@ -9,7 +9,6 @@ and let Telegram's own limits be the only throttle.
 """
 import asyncio
 import logging
-from collections import defaultdict
 
 from telethon import TelegramClient
 from telethon.tl.types import (
