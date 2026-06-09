@@ -2040,6 +2040,134 @@ async def speed_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     )
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+#  /stats — per-job performance summary from checkpoint files
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    /stats — show performance stats pulled from checkpoint files.
+    Distinct from /history (duplicate-protection view):
+      • Grand totals across all jobs
+      • Success rate and flood-wait count per channel pair
+      • Live job overlay when a copy is running
+    No network calls — reads only local checkpoint files.
+    """
+    records = _load_all_checkpoints()
+
+    # ── Live job stats (from bot_data, always fresh) ──────────────────────────
+    bot_data  = context.bot_data
+    copy_task = bot_data.get("active_copy_task")
+    live      = (
+        bot_data.get("active_copy_stats", {})
+        if (copy_task and not copy_task.done()) else None
+    )
+
+    if not records and not live:
+        await update.message.reply_text(
+            "📭 *No stats yet.*\n\n"
+            "Run /copy to start copying — progress is recorded here automatically.",
+            parse_mode="Markdown",
+        )
+        return
+
+    # ── Grand totals ──────────────────────────────────────────────────────────
+    g_copied  = sum(r.get("copied",      0) for r in records)
+    g_skipped = sum(r.get("skipped",     0) for r in records)
+    g_failed  = sum(r.get("failed",      0) for r in records)
+    g_floods  = sum(r.get("flood_waits", 0) for r in records)
+    g_total   = g_copied + g_failed
+    g_rate    = f"{g_copied / g_total * 100:.1f}%" if g_total else "n/a"
+
+    n_jobs    = len(records)
+    jobs_lbl  = "job" if n_jobs == 1 else "jobs"
+    flood_lbl = "wait" if g_floods == 1 else "waits"
+    flood_hdr = f"  \u23f3 `{g_floods:,}` flood {flood_lbl}" if g_floods else ""
+
+    lines = [
+        "\U0001f4ca *Copy Stats \u2014 All Jobs*\n",
+        f"\U0001f4e6 *Grand total across `{n_jobs}` {jobs_lbl}*\n"
+        f"   \u2705 `{g_copied:,}` copied  \u23ed `{g_skipped:,}` skipped  "
+        f"\u274c `{g_failed:,}` failed{flood_hdr}\n"
+        f"   \U0001f3af Success rate: `{g_rate}`",
+    ]
+
+    # ── Per-pair rows ─────────────────────────────────────────────────────────
+    if records:
+        lines.append("\n\U0001f4cb *Per-channel pair:*")
+
+    for i, rec in enumerate(records, 1):
+        src_id  = rec.get("source_id", "?")
+        dst_id  = rec.get("dest_id",   "?")
+        copied  = rec.get("copied",      0)
+        skipped = rec.get("skipped",     0)
+        failed  = rec.get("failed",      0)
+        floods  = rec.get("flood_waits", 0)
+        updated = (rec.get("updated_at") or rec.get("started_at") or "\u2014")[:16]
+        total   = copied + failed
+        rate    = f"{copied / total * 100:.0f}%" if total else "n/a"
+
+        # 10-char progress bar: filled = fraction of (copied / all processed)
+        denom  = copied + skipped + failed
+        filled = int(10 * copied / denom) if denom else 0
+        bar    = "\u2588" * filled + "\u2591" * (10 - filled)
+
+        flood_lbl_p = "wait" if floods == 1 else "waits"
+        flood_note  = f"  \u23f3 `{floods}` flood {flood_lbl_p}" if floods else ""
+
+        lines.append(
+            f"\n*{i}.* `{src_id}` \u2192 `{dst_id}`\n"
+            f"   `{bar}` `{rate}`  \u2705 `{copied:,}` \u23ed `{skipped:,}` \u274c `{failed:,}`{flood_note}\n"
+            f"   \U0001f552 {_code(updated)}"
+        )
+
+    # ── Live job overlay ──────────────────────────────────────────────────────
+    if live:
+        lc = live.get("copied",  0)
+        ls = live.get("skipped", 0)
+        lf = live.get("failed",  0)
+        lt = live.get("total",   0)
+        total_note = f" / `{lt:,}`" if lt else ""
+
+        flood     = bot_data.get("active_flood_wait")
+        flood_live = ""
+        if flood:
+            remaining = int(flood["until"] - time.time())
+            if remaining > 0:
+                fm, fs = divmod(remaining, 60)
+                flood_live = f"  \u23f3 Flood wait: `{fm}m {fs}s` remaining"
+
+        cur_delay  = bot_data.get("active_copy_delay")
+        speed_lbl  = next(
+            (lbl for lbl, dly in _SPEED_CYCLE
+             if cur_delay is not None and abs(dly - cur_delay) < 0.001),
+            "",
+        )
+        speed_note = f"  \u26a1 {_code(speed_lbl)}" if speed_lbl else ""
+
+        lines.append(
+            f"\n\u25b6 *Live job running*\n"
+            f"   \u2705 `{lc:,}`{total_note}  \u23ed `{ls:,}`  \u274c `{lf:,}`{speed_note}{flood_live}"
+        )
+
+    lines.append("\n_Use /history for duplicate-protection details._")
+
+    # ── Chunk into ≤4000-char messages ────────────────────────────────────────
+    pages: list[str] = []
+    current = ""
+    for line in lines:
+        if len(current) + len(line) > 3900 and current:
+            pages.append(current)
+            current = line
+        else:
+            current += line
+    if current:
+        pages.append(current)
+
+    for page in pages:
+        await update.message.reply_text(page, parse_mode="Markdown")
+
+
 def get_extra_handlers() -> list:
     """Standalone command handlers registered outside the conversation."""
     return [
@@ -2053,6 +2181,7 @@ def get_extra_handlers() -> list:
         CommandHandler("clearhistory",  clearhistory_cmd),
         CommandHandler("config",        config_cmd),
         CommandHandler("speed",         speed_cmd),
+        CommandHandler("stats",         stats_cmd),
         # Bare callback handlers so these buttons work even when the user
         # is NOT inside the main-menu conversation (e.g. from /status output).
         # The conv's MAIN_MENU handlers take priority when the user IS in that
