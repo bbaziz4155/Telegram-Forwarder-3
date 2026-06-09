@@ -512,7 +512,7 @@ async def copy_channel_files(
                 ckpt.save(source_id, dest_id, state)
                 last_save = now
 
-            await asyncio.sleep(rate_delay)
+            await asyncio.sleep(rate_delay() if callable(rate_delay) else rate_delay)
 
         for gid in list(album_order):
             n = len(album_buf.get(gid, []))  # count BEFORE pop
