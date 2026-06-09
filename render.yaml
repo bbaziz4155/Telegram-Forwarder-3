@@ -1,0 +1,17 @@
+services:
+  - type: worker
+    name: telegram-forwarder-bot
+    runtime: python
+    region: singapore
+    plan: free
+    buildCommand: pip install -r telegram-bot/requirements.txt
+    startCommand: cd telegram-bot && python main.py
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_API_ID
+        sync: false
+      - key: TELEGRAM_API_HASH
+        sync: false
+      - key: SESSION_STRING
+        sync: false
