@@ -427,12 +427,34 @@ async def copy_channel_files(
         return n
 
     # ── main loop ─────────────────────────────────────────────────────────────
+    # Attempt a Takeout session for the read phase — Telegram's bulk-export
+    # API has lower rate limits and supports wait_time=0, which eliminates
+    # flood waits during iter_messages.  Falls back silently to the normal
+    # client if takeout is unavailable (permission delay, unsupported DC, etc.)
+    # Sending always uses the main client — takeout is read-only.
+    from telethon.errors import TakeoutInitDelayError as _TakeoutDelay
+    _takeout_mgr  = None
+    _iter_client  = client
+    _iter_extra: dict = {}
     try:
-        async for message in client.iter_messages(
+        _takeout_mgr = client.takeout(channels=True, files=True, finalize=True)
+        _iter_client = await _takeout_mgr.__aenter__()
+        _iter_extra  = {"wait_time": 0}
+        logger.info("Takeout session active — using wait_time=0 for iter_messages")
+    except _TakeoutDelay as _e:
+        logger.warning("Takeout delayed %ds — using normal session", _e.seconds)
+        _takeout_mgr = None
+    except Exception as _e:
+        logger.warning("Takeout init failed (%s) — using normal session", _e)
+        _takeout_mgr = None
+
+    try:
+        async for message in _iter_client.iter_messages(
             source_entity,
             limit=limit,
             min_id=resume_from,
             reverse=True,
+            **_iter_extra,
         ):
             gid = message.grouped_id
 
@@ -548,6 +570,13 @@ async def copy_channel_files(
                       "failed": failed, "flood_waits": flood_waits})
         ckpt.save(source_id, dest_id, state)
         raise  # propagate to _run_copy so it can update the bot message
+    finally:
+        # Clean up Takeout session regardless of how the loop exits
+        if _takeout_mgr is not None:
+            try:
+                await _takeout_mgr.__aexit__(None, None, None)
+            except Exception:
+                pass
 
     pbar.close()
 
