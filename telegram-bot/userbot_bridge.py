@@ -42,6 +42,26 @@ async def _connect_loop(bot_data: dict) -> None:
 
     os.makedirs(os.path.join(os.path.dirname(__file__), "sessions"), exist_ok=True)
 
+    def _is_auth_error(exc: Exception) -> bool:
+        """Return True for Telegram auth-key / unauthorised errors."""
+        name = type(exc).__name__
+        msg  = str(exc).lower()
+        return (
+            "authkey" in name.lower()
+            or "unauthorized" in name.lower()
+            or "authorization key" in msg
+            or "auth_key" in msg
+        )
+
+    def _cancel_copy_task(bot_data: dict) -> bool:
+        """Cancel any running copy task. Returns True if one was cancelled."""
+        task = bot_data.get("active_copy_task")
+        if task and not task.done():
+            task.cancel()
+            bot_data["active_copy_task"] = None
+            return True
+        return False
+
     attempt = 0
     while True:
         attempt += 1
@@ -72,6 +92,7 @@ async def _connect_loop(bot_data: dict) -> None:
             # login_start() won't show "still initialising" forever.
             # login_phone() handles the "disconnected" case by reconnecting.
             bot_data["userbot_client"] = client
+            bot_data["userbot_reason"] = "connecting"
             bot_data.pop("userbot_locked", None)
 
             await client.connect()
@@ -80,7 +101,8 @@ async def _connect_loop(bot_data: dict) -> None:
                 logger.warning(
                     "Userbot session not authorised — use /login in the bot to sign in."
                 )
-                bot_data["userbot_ready"] = False
+                bot_data["userbot_ready"]  = False
+                bot_data["userbot_reason"] = "needs_login"
 
                 # Poll every 10 s until the user completes the in-bot login.
                 authorised = False
@@ -99,26 +121,38 @@ async def _connect_loop(bot_data: dict) -> None:
                         await client.disconnect()
                     except Exception:
                         pass
-                    bot_data["userbot_ready"] = False
+                    bot_data["userbot_ready"]  = False
+                    bot_data["userbot_reason"] = "needs_login"
                     await asyncio.sleep(_FAST_DELAY)
                     continue
 
             me = await client.get_me()
             bot_data["userbot_client"] = client
             bot_data["userbot_ready"]  = True
+            bot_data["userbot_reason"] = ""
             logger.info(f"Userbot bridge connected as {me.first_name} (@{me.username})")
 
+            # ── Health-check loop ──────────────────────────────────────────
             while True:
                 await asyncio.sleep(30)
                 try:
                     if not client.is_connected():
                         logger.warning("Userbot connection lost — reconnecting…")
+                        bot_data["userbot_reason"] = "reconnecting"
                         break
                     if not await client.is_user_authorized():
                         logger.warning("Userbot session deauthorised — reconnecting…")
+                        bot_data["userbot_reason"] = "auth_failed"
+                        # Session was revoked server-side: cancel any in-flight copy
+                        if _cancel_copy_task(bot_data):
+                            bot_data["session_lost_during_copy"] = True
+                            logger.warning(
+                                "Active copy task cancelled because session was deauthorised."
+                            )
                         break
                 except Exception as e:
                     logger.warning(f"Userbot health-check failed: {e} — reconnecting…")
+                    bot_data["userbot_reason"] = "reconnecting"
                     break
 
             bot_data["userbot_ready"] = False
@@ -146,9 +180,18 @@ async def _connect_loop(bot_data: dict) -> None:
                 elif attempt == _FAST_RETRIES + 1:
                     logger.warning("Session still locked — switching to slow retries (30 s).")
                 delay = _FAST_DELAY if attempt <= _FAST_RETRIES else _SLOW_DELAY
+                bot_data["userbot_reason"] = "reconnecting"
                 await asyncio.sleep(delay)
+            elif _is_auth_error(e):
+                logger.error(f"Userbot auth error (session invalid/revoked): {e}")
+                bot_data["userbot_reason"] = "auth_failed"
+                if _cancel_copy_task(bot_data):
+                    bot_data["session_lost_during_copy"] = True
+                    logger.warning("Active copy task cancelled due to auth error.")
+                await asyncio.sleep(_SLOW_DELAY)
             else:
                 logger.error(f"Userbot connect failed: {e}")
+                bot_data["userbot_reason"] = "reconnecting"
                 await asyncio.sleep(_SLOW_DELAY)
 
 
