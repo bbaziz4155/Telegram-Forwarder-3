@@ -120,27 +120,29 @@ async def login_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     client = bridge.get_client(context.bot_data)
     if client is None:
-        # Distinguish between "API keys not set" and "still connecting"
+        # Client not created yet — API keys missing or connect_loop hasn't run
         api_id   = os.environ.get("TELEGRAM_API_ID",   "")
         api_hash = os.environ.get("TELEGRAM_API_HASH", "")
         if not api_id or not api_hash:
             await _reply(
-                "❌ Userbot client not initialised.\n"
-                "Check that `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` are set, "
-                "then restart the bot.",
+                "❌ *Userbot not initialised.*\n\n"
+                "Set `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` environment variables "
+                "in your Railway project settings, then redeploy.",
                 parse_mode="Markdown",
                 reply_markup=_menu_kb(),
             )
         else:
             await _reply(
-                "⏳ *Userbot is still initialising…*\n\n"
-                "The client is connecting in the background. "
+                "⏳ *Userbot is still starting up…*\n\n"
+                "The background connection task hasn't run yet. "
                 "Please wait a few seconds and try again.",
                 parse_mode="Markdown",
                 reply_markup=_menu_kb(),
             )
         return ConversationHandler.END
 
+    # Client exists — may be connected or disconnected (e.g. bad SESSION_STRING
+    # caused connect() to fail).  login_phone() will reconnect if needed.
     await _reply(
         "📱 *Userbot Login*\n\n"
         "Send your phone number with country code:\n"
@@ -168,6 +170,23 @@ async def login_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return LOGIN_PHONE
 
     client = bridge.get_client(context.bot_data)
+
+    # Guard: reconnect if the client lost its connection since login_start ran.
+    # This happens when connect() previously failed (bad/expired SESSION_STRING)
+    # but we still set the client in bot_data so the wizard could proceed.
+    if not client.is_connected():
+        try:
+            await client.connect()
+        except Exception as e:
+            await update.message.reply_text(
+                f"❌ *Cannot reach Telegram:* `{e}`\n\n"
+                "Check that `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` are correct "
+                "in your Railway environment variables, then try /login again.",
+                parse_mode="Markdown",
+                reply_markup=_menu_kb(),
+            )
+            return ConversationHandler.END
+
     try:
         sent = await client.send_code_request(phone)
     except Exception as e:
@@ -181,7 +200,7 @@ async def login_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["login_phone"]         = phone
     context.user_data["login_sent"]          = sent
     context.user_data["login_otp_attempts"]  = 0
-    context.user_data["login_resend_count"]  = 0  # reset on every fresh login
+    context.user_data["login_resend_count"]  = 0
 
     where = _where_was_code_sent(sent)
     await update.message.reply_text(
@@ -264,15 +283,9 @@ async def login_otp(update: Update, context: ContextTypes.DEFAULT_TYPE):
             SessionPasswordNeededError,
         )
 
-        # Pass phone_code_hash explicitly so Telethon never uses a stale one.
         await client.sign_in(phone, code, phone_code_hash=sent.phone_code_hash)
 
     except PhoneCodeExpiredError:
-        # ── OTP-EXPIRED FIX ─────────────────────────────────────────────────
-        # Telegram's server marked this hash as expired (codes last ~2 min).
-        # Limit auto-resends: if we've already done 2 auto-resends, the user
-        # is likely entering an old code from Saved Messages — tell them to
-        # scroll to the very bottom and use /login if still stuck.
         resend_count = context.user_data.get("login_resend_count", 0) + 1
         context.user_data["login_resend_count"] = resend_count
 
@@ -307,8 +320,6 @@ async def login_otp(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             return ConversationHandler.END
 
-        # Show CANCEL only (no Resend button) — tapping Resend again immediately
-        # triggers Telegram's flood-wait rate limit on send_code_request.
         sent  = context.user_data.get("login_sent")
         where = _where_was_code_sent(sent) if sent else "your Telegram"
         await update.message.reply_text(
@@ -426,8 +437,6 @@ async def _login_success(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "All userbot features (copy, sync, history) are now active.\n\n"
         "Use /menu to get started.",
         parse_mode="Markdown",
-        # Pass userbot_ready=True so the menu shows "✅ Userbot Connected"
-        # instead of the stale "🔑 Connect Userbot" label.
         reply_markup=main_menu_keyboard(userbot_ready=True),
     )
     return ConversationHandler.END
