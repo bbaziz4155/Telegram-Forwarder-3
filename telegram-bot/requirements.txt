@@ -4,3 +4,4 @@ aiofiles>=23.0.0
 telethon>=1.36.0
 tqdm>=4.66.0
 colorama>=0.4.6
+aiohttp>=3.9.0
