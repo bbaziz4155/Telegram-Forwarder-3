@@ -126,8 +126,8 @@ async def login_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not api_id or not api_hash:
             await _reply(
                 "❌ *Userbot not initialised.*\n\n"
-                "Set `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` environment variables "
-                "in your Replit Secrets (or environment variables), then restart the bot.",
+                "Set `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` as environment variables "
+                "in your hosting platform, then restart the bot.",
                 parse_mode="Markdown",
                 reply_markup=_menu_kb(),
             )
@@ -181,7 +181,7 @@ async def login_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(
                 f"❌ *Cannot reach Telegram:* `{e}`\n\n"
                 "Check that `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` are correct "
-                "in your Replit Secrets (TELEGRAM_API_ID / TELEGRAM_API_HASH), then try /login again.",
+                "in your environment variables, then try /login again.",
                 parse_mode="Markdown",
                 reply_markup=_menu_kb(),
             )
