@@ -3,6 +3,13 @@ from telegram.ext import ContextTypes
 import database as db
 from states import MAIN_MENU, IGNORE_ADD_CHAT, IGNORE_REMOVE_SELECT
 
+
+def _safe(name: str) -> str:
+    """Wrap a chat name in backticks for safe Markdown V1 rendering.
+    Backtick spans are immune to *, _, [ so any name renders correctly."""
+    return "`" + str(name).replace("`", "'") + "`"
+
+
 async def ignore_list_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -12,7 +19,7 @@ async def ignore_list_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = ["🚫 *Ignore List*\n"]
     if items:
         for item in items:
-            lines.append(f"• `#{item['id']}` {item['chat_name']} (`{item['chat_id']}`)")
+            lines.append(f"• `#{item['id']}` {_safe(item['chat_name'])} (`{item['chat_id']}`)")
     else:
         lines.append("No chats in ignore list.")
 
@@ -59,9 +66,9 @@ async def ignore_add_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Keep in-memory ignore_map in sync so live forwarder respects it immediately
         ignore_map = context.bot_data.setdefault("ignore_map", {})
         ignore_map.setdefault(user_id, set()).add(chat_id)
-        reply_text = f"✅ *{chat_name}* added to ignore list."
+        reply_text = f"✅ {_safe(chat_name)} added to ignore list."
     else:
-        reply_text = f"⚠️ *{chat_name}* is already in your ignore list."
+        reply_text = f"⚠️ {_safe(chat_name)} is already in your ignore list."
 
     await update.message.reply_text(
         reply_text,
@@ -85,8 +92,10 @@ async def ignore_remove_start(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     buttons = []
     for item in items:
+        name = item['chat_name'] or str(item['chat_id'])
+        # Button labels are plain text — no parse_mode, no escaping needed
         buttons.append([InlineKeyboardButton(
-            f"#{item['id']}: {item['chat_name']}",
+            f"#{item['id']}: {name[:30]}",
             callback_data=f"rm_ignore_{item['id']}"
         )])
     buttons.append([InlineKeyboardButton("⬅️ Back", callback_data="ignore_list")])
