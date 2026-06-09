@@ -1,7 +1,6 @@
 """
 Interactive terminal menu for the userbot.
 """
-import asyncio
 import logging
 import os
 
@@ -132,12 +131,12 @@ async def run_menu(client: TelegramClient):
     while True:
         pending = _pending_checkpoints()
         _header("MAIN MENU")
-        print(f"  1.  Copy files (no forward tag)")
-        print(f"  2.  Auto-sync new messages (live)")
-        print(f"  3.  Dry run (preview only, nothing sent)")
-        print(f"  4.  List my chats / channels (with IDs)")
+        print("  1.  Copy files (no forward tag)")
+        print("  2.  Auto-sync new messages (live)")
+        print("  3.  Dry run (preview only, nothing sent)")
+        print("  4.  List my chats / channels (with IDs)")
         print(f"  5.  Resume saved job  ({len(pending)} pending)")
-        print(f"  6.  Exit")
+        print("  6.  Exit")
         print(Fore.CYAN + "="*54 + Style.RESET_ALL)
 
         choice = input("\n▶  Choose (1–6): ").strip()
