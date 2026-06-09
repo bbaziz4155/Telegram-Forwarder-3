@@ -8,7 +8,6 @@ Runs until the user presses Ctrl+C.
 import asyncio
 import logging
 import time
-from collections import defaultdict
 
 from telethon import TelegramClient, events
 from colorama import Fore, Style, init as colorama_init
@@ -164,7 +163,7 @@ async def run_sync(
     if allowed_exts:
         print(Fore.CYAN + f"  🔎  Filter : {', '.join(sorted(allowed_exts)).upper()} only" + Style.RESET_ALL)
     if skip_text:
-        print(Fore.CYAN + f"  🚫  Text-only msgs: SKIPPED" + Style.RESET_ALL)
+        print(Fore.CYAN + "  🚫  Text-only msgs: SKIPPED" + Style.RESET_ALL)
     if caption_replacement:
         print(Fore.CYAN + f"  ✏️   @... → {caption_replacement}" + Style.RESET_ALL)
     print(Fore.CYAN + "  Press Ctrl+C to stop." + Style.RESET_ALL)
