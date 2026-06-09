@@ -9,8 +9,11 @@ Checkpoint file location:
     telegram-bot/data/checkpoints/<source_id>_<dest_id>.json
 """
 import json
+import logging
 import os
 import time
+
+logger = logging.getLogger(__name__)
 
 CHECKPOINTS_DIR = os.path.join(
     os.path.dirname(__file__), "..", "data", "checkpoints"
@@ -51,12 +54,30 @@ def load(source_id: int, dest_id: int) -> dict:
 
 def save(source_id: int, dest_id: int, state: dict):
     """Persist checkpoint to disk.
-    Converts the 'copied_ids' set to a sorted list for JSON serialisation."""
+
+    Only serialises IDs strictly greater than last_msg_id ('gap' IDs).
+    IDs <= last_msg_id are implicitly covered by min_id on resume, so
+    persisting the full set causes O(n) disk I/O that grows linearly with
+    channel size — for an 830 K-message channel that is ~8 MB written every
+    25 messages (~265 GB total I/O over a full run).  Gap IDs stay tiny:
+    they are only the few album siblings above the current watermark.
+    """
     state["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    last_id = state.get("last_msg_id", 0)
     on_disk = dict(state)
-    on_disk["copied_ids"] = sorted(state.get("copied_ids", set()))
-    with open(_path(source_id, dest_id), "w") as f:
-        json.dump(on_disk, f, indent=2)
+    # Only keep IDs above the watermark.  Everything <= last_msg_id is
+    # redundant because copy_channel_files uses min_id=last_msg_id on
+    # resume, which already skips those messages entirely.
+    gap_ids = sorted(i for i in state.get("copied_ids", set()) if i > last_id)
+    on_disk["copied_ids"] = gap_ids
+    try:
+        with open(_path(source_id, dest_id), "w") as f:
+            json.dump(on_disk, f, indent=2)
+    except Exception as e:
+        logger.warning(
+            "Checkpoint save failed (%s_%s) — progress may be lost on crash: %s",
+            source_id, dest_id, e,
+        )
 
 
 def delete(source_id: int, dest_id: int):
