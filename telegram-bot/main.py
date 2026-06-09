@@ -30,7 +30,11 @@ class _HealthHandler(BaseHTTPRequestHandler):
 
 def _start_health_server():
     port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(("0.0.0.0", port), _HealthHandler)
+    try:
+        server = HTTPServer(("0.0.0.0", port), _HealthHandler)
+    except OSError as e:
+        logger.warning(f"Health server could not bind to port {port}: {e} — skipping")
+        return
     logger.info(f"Health server listening on port {port}")
     # non-daemon so the process stays alive even if the bot loop exits
     thread = threading.Thread(target=server.serve_forever)
@@ -40,6 +44,7 @@ def _start_health_server():
 def main():
     # Start HTTP health server FIRST — before anything else so Railway's
     # health check always gets a 200 OK regardless of bot startup state.
+    # On Replit this port may be unavailable; the server gracefully skips.
     _start_health_server()
 
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
