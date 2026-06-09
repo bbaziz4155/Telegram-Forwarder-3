@@ -23,6 +23,7 @@ from handlers import copybot as copybot_handler
 from handlers import login as login_handler
 from handlers import preview as preview_handler
 from handlers import gensession as gensession_handler
+from handlers import deletesession as deletesession_handler
 from states import (
     MAIN_MENU,
     ADD_RULE_SOURCE,
@@ -155,6 +156,10 @@ def build_app(token: str) -> Application:
 
     # Standalone userbot control commands
     for h in copybot_handler.get_extra_handlers():
+        app.add_handler(h)
+
+    # Session management commands
+    for h in deletesession_handler.get_deletesession_handlers():
         app.add_handler(h)
 
     # Fallback: unknown /commands and plain text outside any conversation
