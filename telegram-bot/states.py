@@ -27,3 +27,8 @@ LOGIN_2FA   = 16
 
 # Caption-preview wizard state (used by handlers/preview.py)
 PREVIEW_AWAIT_MSG = 17
+
+# /gensession wizard states (used by handlers/gensession.py)
+GENSESSION_PHONE = 18
+GENSESSION_OTP   = 19
+GENSESSION_2FA   = 20
