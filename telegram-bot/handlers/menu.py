@@ -81,6 +81,9 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /config — Show all active configuration settings\n"
         "• /speed — Change copy speed _(Safe / Normal / Fast / Turbo)_\n"
         "• /listchats — List all channels & groups your userbot can see\n\n"
+        "*Session management:*\n"
+        "• /gensession — Generate a fresh `SESSION_STRING` in-chat _(no external tools needed)_\n"
+        "• /deletesession — Permanently revoke the active session _(use if session is compromised)_\n\n"
         "*Important:* The bot must be an admin in destination chats.\n"
         "For /copy and /sync, you only need to be a *member* of the source channel."
     )
