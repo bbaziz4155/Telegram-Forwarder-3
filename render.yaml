@@ -1,11 +1,12 @@
 services:
-  - type: worker
+  - type: web
     name: telegram-forwarder-bot
     runtime: python
     region: singapore
     plan: free
     buildCommand: pip install -r telegram-bot/requirements.txt
     startCommand: cd telegram-bot && python main.py
+    healthCheckPath: /
     envVars:
       - key: TELEGRAM_BOT_TOKEN
         sync: false
