@@ -12,9 +12,10 @@ import os
 
 logger = logging.getLogger(__name__)
 
-API_ID   = int(os.environ.get("TELEGRAM_API_ID",   "0"))
-API_HASH = os.environ.get("TELEGRAM_API_HASH", "")
-SESSION_PATH = os.path.join(os.path.dirname(__file__), "sessions", "userbot")
+API_ID        = int(os.environ.get("TELEGRAM_API_ID",   "0"))
+API_HASH      = os.environ.get("TELEGRAM_API_HASH", "")
+SESSION_STRING = os.environ.get("SESSION_STRING", "")
+SESSION_PATH  = os.path.join(os.path.dirname(__file__), "sessions", "userbot")
 
 _FAST_RETRIES = 12
 _FAST_DELAY   = 5
@@ -32,6 +33,7 @@ async def _connect_loop(bot_data: dict) -> None:
     """
     try:
         from telethon import TelegramClient
+        from telethon.sessions import StringSession
     except ImportError:
         logger.warning("telethon not installed — userbot commands disabled")
         return
@@ -43,7 +45,17 @@ async def _connect_loop(bot_data: dict) -> None:
         attempt += 1
         client = None
         try:
-            client = TelegramClient(SESSION_PATH, API_ID, API_HASH)
+            # Prefer SESSION_STRING (persists across container restarts) over
+            # the on-disk session file.  On Railway / any ephemeral host the
+            # file disappears on every redeploy, so STRING is mandatory there.
+            if SESSION_STRING:
+                session = StringSession(SESSION_STRING)
+                logger.info("Userbot: using StringSession from env")
+            else:
+                session = SESSION_PATH
+                logger.info("Userbot: using file session at %s", SESSION_PATH)
+
+            client = TelegramClient(session, API_ID, API_HASH)
             await client.connect()
 
             # ── Set the client IMMEDIATELY after connect, before auth check ──
