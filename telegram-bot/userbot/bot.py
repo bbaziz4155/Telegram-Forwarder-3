@@ -76,7 +76,7 @@ class UserBot:
         phone = input("Enter your phone number (with country code, e.g. +12345678901): ").strip()
 
         try:
-            sent = await self.client.send_code_request(phone)
+            await self.client.send_code_request(phone)
         except Exception as e:
             print(Fore.RED + f"❌  Failed to send code: {e}" + Style.RESET_ALL)
             sys.exit(1)
