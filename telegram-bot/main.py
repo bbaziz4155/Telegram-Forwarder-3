@@ -32,19 +32,22 @@ def _start_health_server():
     port = int(os.environ.get("PORT", 8080))
     server = HTTPServer(("0.0.0.0", port), _HealthHandler)
     logger.info(f"Health server listening on port {port}")
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    # non-daemon so the process stays alive even if the bot loop exits
+    thread = threading.Thread(target=server.serve_forever)
     thread.start()
 
 
 def main():
+    # Start HTTP health server FIRST — before anything else so Railway's
+    # health check always gets a 200 OK regardless of bot startup state.
+    _start_health_server()
+
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     if not token:
-        raise RuntimeError("TELEGRAM_BOT_TOKEN environment variable is not set")
-
-    # Start HTTP health server in background thread FIRST — completely
-    # independent of the bot's asyncio loop so Railway's health check passes
-    # even while the bot is still initialising.
-    _start_health_server()
+        logger.error("TELEGRAM_BOT_TOKEN is not set — bot will not start")
+        # Keep the process alive so the health check keeps passing
+        threading.Event().wait()
+        return
 
     app = build_app(token)
     logger.info("Starting Telegram Forwarder Bot...")
