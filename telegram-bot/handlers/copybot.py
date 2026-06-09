@@ -1691,18 +1691,43 @@ async def copystats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 #  Auto-resume — restart an interrupted copy job on bot startup
 # ═══════════════════════════════════════════════════════════════════════════════
 
-async def _auto_resume_start(application, resume: dict) -> None:
+_AR_CANCEL_KEY = "ar_cancel_pending"
+_AR_COUNTDOWN  = 20   # seconds the user has to cancel before the job starts
+
+_AR_CANCEL_KB = InlineKeyboardMarkup([
+    [InlineKeyboardButton("❌ Cancel Auto-Resume", callback_data="ar_cancel")],
+])
+
+
+async def ar_cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Inline button — user cancels the pending auto-resume countdown."""
+    query = update.callback_query
+    await query.answer("Auto-resume cancelled.")
+    context.bot_data[_AR_CANCEL_KEY] = True
+    _ar.clear_resume()
+    try:
+        await query.edit_message_text(
+            "❌ *Auto-resume cancelled.*\n\n"
+            "The saved checkpoint is still on disk — use /resume to restart "
+            "it manually whenever you're ready.",
+            parse_mode="Markdown",
+        )
+    except Exception:
+        pass
+
+
+async def _auto_resume_start(application, resume: dict, countdown_msg_id: int | None) -> None:
     """
     Launch a copy job from persisted auto-resume state (no user interaction).
-    Sends a Telegram notification to the original chat_id so the user knows
-    the job restarted automatically.
+    countdown_msg_id is the message we sent during the countdown — we reuse
+    it as the progress message so the user sees a smooth transition.
     """
     bot      = application.bot
     bot_data = application.bot_data
     chat_id  = resume["chat_id"]
     src      = resume["src"]
     dst      = resume["dst"]
-    opts     = resume["opts"]   # already has allowed_exts as a set (load_resume converts)
+    opts     = resume["opts"]
 
     client = bridge.get_client(bot_data)
     if client is None:
@@ -1716,26 +1741,21 @@ async def _auto_resume_start(application, resume: dict) -> None:
         _ar.clear_resume()
         return
 
+    # Edit the countdown message → "Resuming…" so progress updates follow naturally
+    msg_id = countdown_msg_id
     try:
-        notify_msg = await bot.send_message(
-            chat_id,
-            "♻️ *Auto-Resume*\n\n"
-            "The bot restarted while a copy job was running.\n"
-            "Resuming from last checkpoint…\n\n"
-            f"📡 `{src}` → `{dst}`\n\n"
-            "_Send /stopjob to cancel._",
-            parse_mode="Markdown",
-        )
+        if msg_id:
+            await bot.edit_message_text(
+                "♻️ *Auto-Resume — Starting…*\n\n"
+                f"📡 `{src}` → `{dst}`\n\n"
+                "_Use /stopjob to cancel at any time._",
+                chat_id=chat_id,
+                message_id=msg_id,
+                parse_mode="Markdown",
+            )
     except Exception as e:
-        logger.warning("Auto-resume: could not send notification to chat %s: %s", chat_id, e)
-        # Still try to resume even without a notification message
-        notify_msg = None
+        logger.debug("Auto-resume: could not edit countdown message: %s", e)
 
-    msg_id = notify_msg.message_id if notify_msg else None
-
-    # Always use BotProgressNotifier so flood-wait notifications reach the user.
-    # tick() edits msg_id (and silently fails if msg_id is None); flood_wait()
-    # always sends a NEW message, so it works regardless of msg_id.
     notifier = BotProgressNotifier(
         bot, chat_id, msg_id,
         every=opts.get("notify_every", 100),
@@ -1753,31 +1773,82 @@ async def _auto_resume_start(application, resume: dict) -> None:
 async def schedule_auto_resume(application) -> None:
     """
     Called once at startup (via asyncio.create_task in post_init).
-    Waits for the userbot to be ready, then restores any interrupted copy job.
+    Waits for the userbot to be ready, shows a countdown with a Cancel button,
+    then starts the job unless the user cancels within _AR_COUNTDOWN seconds.
     """
     resume = _ar.load_resume()
     if not resume:
         return  # nothing to resume — fast path
 
+    chat_id = resume.get("chat_id")
+    src     = resume.get("src")
+    dst     = resume.get("dst")
+
     logger.info(
         "Auto-resume: found saved job (src=%s dst=%s chat=%s) — waiting for userbot…",
-        resume.get("src"), resume.get("dst"), resume.get("chat_id"),
+        src, dst, chat_id,
     )
 
-    # Poll until userbot is connected (up to 90 s; bridge typically connects in < 5 s)
-    loop = asyncio.get_running_loop()
+    # Poll until userbot is connected (up to 90 s)
+    loop     = asyncio.get_running_loop()
     deadline = loop.time() + 90
     while not bridge.is_ready(application.bot_data):
         if loop.time() > deadline:
-            logger.warning(
-                "Auto-resume: timed out waiting for userbot after 90 s — aborting."
-            )
-            # Do NOT clear resume file — let the next restart try again
+            logger.warning("Auto-resume: timed out waiting for userbot after 90 s — aborting.")
             return
         await asyncio.sleep(2)
 
-    logger.info("Auto-resume: userbot ready — launching resumed job")
-    await _auto_resume_start(application, resume)
+    # ── Send countdown notice with Cancel button ──────────────────────────────
+    application.bot_data[_AR_CANCEL_KEY] = False
+    bot = application.bot
+    countdown_msg_id = None
+    try:
+        msg = await bot.send_message(
+            chat_id,
+            f"♻️ *Auto-Resume Pending*\n\n"
+            f"The bot restarted while a copy job was in progress.\n"
+            f"📡 `{src}` → `{dst}`\n\n"
+            f"⏳ Starting automatically in *{_AR_COUNTDOWN} seconds*…\n\n"
+            f"Tap the button below to cancel, or do nothing to let it resume.",
+            parse_mode="Markdown",
+            reply_markup=_AR_CANCEL_KB,
+        )
+        countdown_msg_id = msg.message_id
+    except Exception as e:
+        logger.warning("Auto-resume: could not send countdown message to %s: %s", chat_id, e)
+
+    # ── Wait for countdown, checking cancel flag every second ─────────────────
+    for remaining in range(_AR_COUNTDOWN - 1, 0, -1):
+        await asyncio.sleep(1)
+        if application.bot_data.get(_AR_CANCEL_KEY):
+            logger.info("Auto-resume: cancelled by user during countdown.")
+            application.bot_data.pop(_AR_CANCEL_KEY, None)
+            return
+        # Update the message every 5 s so the user sees it counting down
+        if remaining % 5 == 0 and countdown_msg_id:
+            try:
+                await bot.edit_message_text(
+                    f"♻️ *Auto-Resume Pending*\n\n"
+                    f"📡 `{src}` → `{dst}`\n\n"
+                    f"⏳ Starting in *{remaining} seconds*…\n\n"
+                    f"Tap below to cancel.",
+                    chat_id=chat_id,
+                    message_id=countdown_msg_id,
+                    parse_mode="Markdown",
+                    reply_markup=_AR_CANCEL_KB,
+                )
+            except Exception:
+                pass
+
+    # Final cancel check before launching
+    if application.bot_data.get(_AR_CANCEL_KEY):
+        logger.info("Auto-resume: cancelled by user just before launch.")
+        application.bot_data.pop(_AR_CANCEL_KEY, None)
+        return
+
+    application.bot_data.pop(_AR_CANCEL_KEY, None)
+    logger.info("Auto-resume: countdown elapsed — launching resumed job")
+    await _auto_resume_start(application, resume, countdown_msg_id)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2195,4 +2266,5 @@ def get_extra_handlers() -> list:
         CallbackQueryHandler(listchats_callback,    pattern="^listchats_menu$"),
         CallbackQueryHandler(clearhistory_callback, pattern="^clrhist"),
         CallbackQueryHandler(speed_callback,        pattern=f"^{_SPEED_CB}"),
+        CallbackQueryHandler(ar_cancel_callback,    pattern="^ar_cancel$"),
     ]
