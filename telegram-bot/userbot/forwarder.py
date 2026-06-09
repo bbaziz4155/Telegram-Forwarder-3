@@ -380,6 +380,12 @@ async def copy_channel_files(
         if notify_every > 0 and not dry_run_mode:
             _info(f"🔔  Telegram notifications every {notify_every} files → Saved Messages")
 
+    # ── flood-wait wrapper: increments counter AND notifies bot ────────────────────
+    async def _on_flood(secs: int):
+        nonlocal flood_waits
+        flood_waits += 1
+        await notifier.flood_wait(secs)
+
     # ── album buffer ──────────────────────────────────────────────────────────
     album_buf: dict = {}
     album_order: list = []
@@ -405,7 +411,7 @@ async def copy_channel_files(
             client, dest_entity, msgs,
             dry_run=dry_run_mode,
             caption_replacement=caption_replacement,
-            on_flood_wait=notifier.flood_wait,
+            on_flood_wait=_on_flood,
         )
         if result == "ok":
             copied += n
@@ -485,7 +491,7 @@ async def copy_channel_files(
                     client, dest_entity, message,
                     dry_run=dry_run_mode,
                     caption_replacement=caption_replacement,
-                    on_flood_wait=notifier.flood_wait,
+                    on_flood_wait=_on_flood,
                 )
                 if result == "ok":
                     copied += 1
