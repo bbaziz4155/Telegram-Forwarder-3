@@ -774,9 +774,27 @@ def _build_status_text(bot_data: dict) -> str:
     elif _bridge.is_locked(bot_data):
         lines.append("🤖 *Userbot:* ⏳ Session busy (retrying…)")
     elif bot_data.get("userbot_client") is not None:
-        lines.append("🤖 *Userbot:* 🔑 Not logged in — tap Connect Userbot")
+        reason = bot_data.get("userbot_reason", "")
+        if reason == "reconnecting" or reason == "connecting":
+            lines.append("🤖 *Userbot:* 🔄 Reconnecting… (will resume shortly)")
+        elif reason == "auth_failed":
+            lines.append(
+                "🤖 *Userbot:* ⚠️ Session invalid/revoked\n"
+                "   → Generate a new session with /gensession"
+            )
+        elif reason == "needs_login":
+            lines.append("🤖 *Userbot:* 🔑 Not logged in — use /login to sign in")
+        else:
+            lines.append("🤖 *Userbot:* 🔄 Starting up…")
     else:
         lines.append("🤖 *Userbot:* ❌ Not initialised")
+
+    # Session-lost warning (set by bridge when copy was cancelled due to auth failure)
+    if bot_data.pop("session_lost_during_copy", False):
+        lines.append(
+            "\n⚠️ *Copy job was stopped* because the Telegram session was revoked.\n"
+            "Use /gensession to create a fresh session, then /copy to restart."
+        )
 
     # Forward rules
     rules = bot_data.get("forward_rules", {})
