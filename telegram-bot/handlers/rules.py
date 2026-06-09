@@ -1,5 +1,5 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes, ConversationHandler
+from telegram.ext import ContextTypes
 import database as db
 from states import MAIN_MENU, ADD_RULE_SOURCE, ADD_RULE_DEST, ADD_RULE_CONFIRM, DELETE_RULE_SELECT
 
