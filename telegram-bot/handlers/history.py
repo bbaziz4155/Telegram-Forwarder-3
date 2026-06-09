@@ -16,15 +16,10 @@ async def history_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not bridge.is_ready(context.bot_data):
         locked = bridge.is_locked(context.bot_data)
         msg = (
-            "⏳ *Userbot is still connecting…*
-
-Please wait a moment and try again."
+            "⏳ *Userbot is still connecting…*\n\nPlease wait a moment and try again."
             if locked else
-            "❌ *Userbot not connected*
-
-"
-            "Tap *🔑 Connect Userbot* in the menu (or send /login) to sign in
-"
+            "❌ *Userbot not connected*\n\n"
+            "Tap *🔑 Connect Userbot* in the menu (or send /login) to sign in\n"
             "with your phone number and OTP. Your session is saved permanently."
         )
         await query.edit_message_text(
@@ -34,16 +29,10 @@ Please wait a moment and try again."
         return MAIN_MENU
 
     await query.edit_message_text(
-        "📜 *Forward History*
-
-"
+        "📜 *Forward History*\n\n"
         "Copies recent messages from a source channel to a destination — "
-        "without the 'Forwarded from' tag.
-
-"
-        "Step 1/3: Send me the *source channel ID* (copy FROM).
-
-"
+        "without the 'Forwarded from' tag.\n\n"
+        "Step 1/3: Send me the *source channel ID* (copy FROM).\n\n"
         "💡 Use /listchats to find channel IDs.",
         parse_mode="Markdown"
     )
@@ -68,9 +57,7 @@ async def history_source(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["hist_source_name"] = chat_name
 
     await update.message.reply_text(
-        f"✅ Source: *{chat_name}*
-
-"
+        f"✅ Source: `{chat_name}`\n\n"
         "Step 2/3: Send me the *destination channel ID* (copy TO).",
         parse_mode="Markdown"
     )
@@ -96,11 +83,8 @@ async def history_dest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["hist_dest_name"] = chat_name
 
     await update.message.reply_text(
-        f"✅ Destination: *{chat_name}*
-
-"
-        "Step 3/3: How many recent messages to copy? (1–500)
-"
+        f"✅ Destination: `{chat_name}`\n\n"
+        "Step 3/3: How many recent messages to copy? (1–500)\n"
         "Send a number, e.g. `100`",
         parse_mode="Markdown"
     )
@@ -117,23 +101,35 @@ async def history_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Please send a number between 1 and 500.")
         return FORWARD_HISTORY_LIMIT
 
+    # Guard: reject if a history copy is already running
+    existing_task = context.bot_data.get("_history_task")
+    if existing_task and not existing_task.done():
+        await update.message.reply_text(
+            "⚠️ *A history copy is already running.*\n\n"
+            "Please wait for it to finish before starting another.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back to Menu", callback_data="menu")]])
+        )
+        return MAIN_MENU
+
     source_id   = context.user_data["hist_source_id"]
     source_name = context.user_data["hist_source_name"]
     dest_id     = context.user_data["hist_dest_id"]
     dest_name   = context.user_data["hist_dest_name"]
 
     status_msg = await update.message.reply_text(
-        f"⏳ Copying up to *{limit}* messages from *{source_name}* to *{dest_name}*…
-
-"
-        "_This may take a while for large batches. The bot stays responsive while copying._",
+        f"⏳ *Starting history copy…*\n\n"
+        f"📡 From: `{source_name}`\n"
+        f"📥 To: `{dest_name}`\n"
+        f"📊 Up to `{limit}` messages\n\n"
+        f"_Progress updates will appear here every 25 messages._",
         parse_mode="Markdown"
     )
 
-    client = bridge.get_client(context.bot_data)
-    bot    = context.application.bot
-    chat_id    = update.message.chat_id
-    msg_id     = status_msg.message_id
+    client  = bridge.get_client(context.bot_data)
+    bot     = context.application.bot
+    chat_id = update.message.chat_id
+    msg_id  = status_msg.message_id
 
     async def _do_history_copy():
         from userbot.sender import _do_send, send_album
@@ -143,6 +139,23 @@ async def history_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         copied  = 0
         skipped = 0
         failed  = 0
+
+        async def _update_status():
+            """Edit the status message with current progress."""
+            try:
+                await bot.edit_message_text(
+                    f"⏳ *History Copy in Progress…*\n\n"
+                    f"✅ Copied  : `{copied:,}`\n"
+                    f"⏭ Skipped : `{skipped:,}`\n"
+                    f"❌ Failed  : `{failed:,}`\n\n"
+                    f"📡 From: `{source_name}`\n"
+                    f"📥 To: `{dest_name}`\n\n"
+                    f"_Please wait…_",
+                    chat_id=chat_id, message_id=msg_id,
+                    parse_mode="Markdown",
+                )
+            except Exception:
+                pass
 
         try:
             source_entity = await client.get_entity(source_id)
@@ -174,6 +187,7 @@ async def history_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     failed += len(msgs_in)
                 await asyncio.sleep(0.4)
 
+            processed = 0
             for msg in messages:
                 gid = msg.grouped_id
                 if gid:
@@ -187,17 +201,21 @@ async def history_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                     if not matches_filter(msg, set(), skip_text=False):
                         skipped += 1
-                        continue
-
-                    result = await _do_send(client, dest_entity, msg,
-                                            caption_replacement=caption_replacement)
-                    if result == "ok":
-                        copied += 1
-                    elif result == "skip":
-                        skipped += 1
                     else:
-                        failed += 1
-                    await asyncio.sleep(0.35)
+                        result = await _do_send(client, dest_entity, msg,
+                                                caption_replacement=caption_replacement)
+                        if result == "ok":
+                            copied += 1
+                        elif result == "skip":
+                            skipped += 1
+                        else:
+                            failed += 1
+                        await asyncio.sleep(0.35)
+
+                processed += 1
+                # Update status every 25 processed messages
+                if processed % 25 == 0:
+                    await _update_status()
 
             for gid in list(album_order):
                 await _flush_album(gid)
@@ -219,8 +237,9 @@ async def history_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.exception("History copy error")
             try:
                 await bot.edit_message_text(
-                    f"❌ Error during history copy: {e}",
+                    f"❌ Error during history copy: `{e}`",
                     chat_id=chat_id, message_id=msg_id,
+                    parse_mode="Markdown",
                     reply_markup=InlineKeyboardMarkup(
                         [[InlineKeyboardButton("⬅️ Back", callback_data="menu")]]
                     ),
@@ -232,19 +251,12 @@ async def history_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         status_icon = "✅" if failed == 0 else "⚠️"
         try:
             await bot.edit_message_text(
-                f"{status_icon} *History Copy Complete*
-
-"
-                f"✅ Copied  : `{copied:,}`
-"
-                f"⏭ Skipped : `{skipped:,}`
-"
-                f"❌ Failed  : `{failed:,}`
-
-"
-                f"📡 From: *{source_name}*
-"
-                f"📥 To: *{dest_name}*",
+                f"{status_icon} *History Copy Complete*\n\n"
+                f"✅ Copied  : `{copied:,}`\n"
+                f"⏭ Skipped : `{skipped:,}`\n"
+                f"❌ Failed  : `{failed:,}`\n\n"
+                f"📡 From: `{source_name}`\n"
+                f"📥 To: `{dest_name}`",
                 chat_id=chat_id, message_id=msg_id,
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup(
@@ -254,7 +266,8 @@ async def history_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-    # Store reference so the task isn't garbage-collected before it finishes.
+    # Store reference so the task isn't garbage-collected and to guard against
+    # concurrent runs (checked at the start of history_limit).
     task = asyncio.create_task(_do_history_copy())
     context.bot_data["_history_task"] = task
     return MAIN_MENU
