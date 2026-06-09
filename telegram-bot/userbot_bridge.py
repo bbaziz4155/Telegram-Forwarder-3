@@ -2,9 +2,10 @@
 Manages a shared Telethon userbot client inside PTB's asyncio event loop.
 
 The connection is made in a background task so the bot starts polling
-immediately. The client is stored in bot_data as soon as it connects
-(even before authorisation) so the in-bot login wizard can use it
-straight away.
+immediately. The client is stored in bot_data as soon as it is created
+(BEFORE connect()) so the in-bot login wizard can always find it — even
+if the initial connection fails due to a bad SESSION_STRING, network
+hiccup, or other transient error.
 """
 import asyncio
 import logging
@@ -26,10 +27,11 @@ async def _connect_loop(bot_data: dict) -> None:
     """
     Background task — connects the Telethon client and keeps it available.
 
-    Key guarantee: bot_data["userbot_client"] is set to the connected client
-    immediately after connect() succeeds, BEFORE the authorisation check.
-    This means the in-bot /login wizard can always call send_code_request()
-    even if the session file has no saved credentials yet.
+    Key guarantee: bot_data["userbot_client"] is set to the client object
+    BEFORE connect() is awaited.  This means the in-bot /login wizard always
+    finds a usable client even if the initial connection attempt fails (bad
+    SESSION_STRING, network error, etc.) — it just reconnects inside
+    login_phone() before calling send_code_request().
     """
     try:
         from telethon import TelegramClient
@@ -45,24 +47,34 @@ async def _connect_loop(bot_data: dict) -> None:
         attempt += 1
         client = None
         try:
-            # Prefer SESSION_STRING (persists across container restarts) over
-            # the on-disk session file.  On Railway / any ephemeral host the
-            # file disappears on every redeploy, so STRING is mandatory there.
+            # Validate SESSION_STRING before using it.  An invalid/malformed
+            # string raises an exception in StringSession(); we catch it here
+            # and fall back to the file session so /login can still work.
             if SESSION_STRING:
-                session = StringSession(SESSION_STRING)
-                logger.info("Userbot: using StringSession from env")
+                try:
+                    session = StringSession(SESSION_STRING)
+                    logger.info("Userbot: using StringSession from env")
+                except Exception as e:
+                    logger.warning(
+                        "SESSION_STRING is invalid (%s) — "
+                        "falling back to file session so /login can work.", e
+                    )
+                    session = SESSION_PATH
             else:
                 session = SESSION_PATH
                 logger.info("Userbot: using file session at %s", SESSION_PATH)
 
             client = TelegramClient(session, API_ID, API_HASH)
-            await client.connect()
 
-            # ── Set the client IMMEDIATELY after connect, before auth check ──
-            # This is critical: the login wizard checks get_client() and will
-            # fail with "still initialising" if we delay setting this.
+            # ── Set the client BEFORE connect ──────────────────────────────
+            # This is the critical fix: if connect() raises (bad session,
+            # network error) bot_data["userbot_client"] is already set, so
+            # login_start() won't show "still initialising" forever.
+            # login_phone() handles the "disconnected" case by reconnecting.
             bot_data["userbot_client"] = client
             bot_data.pop("userbot_locked", None)
+
+            await client.connect()
 
             if not await client.is_user_authorized():
                 logger.warning(
@@ -71,8 +83,6 @@ async def _connect_loop(bot_data: dict) -> None:
                 bot_data["userbot_ready"] = False
 
                 # Poll every 10 s until the user completes the in-bot login.
-                # authorised=True  → break and fall through to get_me() below.
-                # Exception        → break and reconnect (connection dropped).
                 authorised = False
                 while True:
                     await asyncio.sleep(10)
@@ -85,9 +95,6 @@ async def _connect_loop(bot_data: dict) -> None:
                         break
 
                 if not authorised:
-                    # Connection dropped — reconnect from scratch.
-                    # Don't reset userbot_client to None — the login wizard
-                    # needs the reference to call send_code_request().
                     try:
                         await client.disconnect()
                     except Exception:
@@ -101,10 +108,6 @@ async def _connect_loop(bot_data: dict) -> None:
             bot_data["userbot_ready"]  = True
             logger.info(f"Userbot bridge connected as {me.first_name} (@{me.username})")
 
-            # Stay in the loop and monitor the connection — do NOT return.
-            # If Telethon loses its connection or the session is revoked,
-            # reset userbot_ready and reconnect so /copy etc. don't silently fail.
-            # NOTE: is_connected() is a plain bool method (not a coroutine) in Telethon.
             while True:
                 await asyncio.sleep(30)
                 try:
@@ -118,7 +121,6 @@ async def _connect_loop(bot_data: dict) -> None:
                     logger.warning(f"Userbot health-check failed: {e} — reconnecting…")
                     break
 
-            # Connection dropped — reset state and fall through to retry loop
             bot_data["userbot_ready"] = False
             try:
                 await client.disconnect()
@@ -147,8 +149,6 @@ async def _connect_loop(bot_data: dict) -> None:
                 await asyncio.sleep(delay)
             else:
                 logger.error(f"Userbot connect failed: {e}")
-                # Don't give up — wait and retry so a transient network
-                # hiccup doesn't permanently disable userbot features.
                 await asyncio.sleep(_SLOW_DELAY)
 
 
@@ -165,7 +165,6 @@ async def init_userbot(application) -> None:
         logger.warning("TELEGRAM_API_ID/HASH not set — userbot commands disabled")
         return
 
-    # Store the task so it isn't garbage-collected before it runs.
     task = asyncio.create_task(_connect_loop(bot_data))
     bot_data["_userbot_connect_task"] = task
     logger.info("Userbot bridge task started in background")
