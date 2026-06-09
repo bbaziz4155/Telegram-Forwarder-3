@@ -22,6 +22,7 @@ from handlers import ignore as ignore_handler
 from handlers import copybot as copybot_handler
 from handlers import login as login_handler
 from handlers import preview as preview_handler
+from handlers import gensession as gensession_handler
 from states import (
     MAIN_MENU,
     ADD_RULE_SOURCE,
@@ -137,16 +138,18 @@ def build_app(token: str) -> Application:
 
     login_conv = login_handler.build_login_conv()
 
-    preview_conv = preview_handler.build_preview_conv()
+    preview_conv    = preview_handler.build_preview_conv()
+    gensession_conv = gensession_handler.build_gensession_conv()
 
     # preview_conv is first: when in PREVIEW_AWAIT_MSG state any non-command
     # message goes there before copy_conv or conv can intercept it.
-    # copy_conv and login_conv are registered BEFORE conv so that /copy,
-    # /dryrun, /sync, and /login always work even when the user is stuck
-    # in a stale conv state (e.g. Forward History awaiting input).
+    # copy_conv, login_conv, and gensession_conv are registered BEFORE conv so
+    # that /copy, /dryrun, /sync, /login, and /gensession always work even when
+    # the user is stuck in a stale conv state.
     app.add_handler(preview_conv)
     app.add_handler(copy_conv)
     app.add_handler(login_conv)
+    app.add_handler(gensession_conv)
     app.add_handler(conv)
     app.add_handler(CommandHandler("help", menu_handler.help_cmd))
 
