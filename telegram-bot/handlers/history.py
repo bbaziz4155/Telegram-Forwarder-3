@@ -16,10 +16,15 @@ async def history_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not bridge.is_ready(context.bot_data):
         locked = bridge.is_locked(context.bot_data)
         msg = (
-            "⏳ *Userbot is still connecting…*\n\nPlease wait a moment and try again."
+            "⏳ *Userbot is still connecting…*
+
+Please wait a moment and try again."
             if locked else
-            "❌ *Userbot not connected*\n\n"
-            "Tap *🔑 Connect Userbot* in the menu (or send /login) to sign in\n"
+            "❌ *Userbot not connected*
+
+"
+            "Tap *🔑 Connect Userbot* in the menu (or send /login) to sign in
+"
             "with your phone number and OTP. Your session is saved permanently."
         )
         await query.edit_message_text(
@@ -29,10 +34,16 @@ async def history_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return MAIN_MENU
 
     await query.edit_message_text(
-        "📜 *Forward History*\n\n"
+        "📜 *Forward History*
+
+"
         "Copies recent messages from a source channel to a destination — "
-        "without the 'Forwarded from' tag.\n\n"
-        "Step 1/3: Send me the *source channel ID* (copy FROM).\n\n"
+        "without the 'Forwarded from' tag.
+
+"
+        "Step 1/3: Send me the *source channel ID* (copy FROM).
+
+"
         "💡 Use /listchats to find channel IDs.",
         parse_mode="Markdown"
     )
@@ -57,7 +68,9 @@ async def history_source(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["hist_source_name"] = chat_name
 
     await update.message.reply_text(
-        f"✅ Source: *{chat_name}*\n\n"
+        f"✅ Source: *{chat_name}*
+
+"
         "Step 2/3: Send me the *destination channel ID* (copy TO).",
         parse_mode="Markdown"
     )
@@ -83,8 +96,11 @@ async def history_dest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["hist_dest_name"] = chat_name
 
     await update.message.reply_text(
-        f"✅ Destination: *{chat_name}*\n\n"
-        "Step 3/3: How many recent messages to copy? (1–500)\n"
+        f"✅ Destination: *{chat_name}*
+
+"
+        "Step 3/3: How many recent messages to copy? (1–500)
+"
         "Send a number, e.g. `100`",
         parse_mode="Markdown"
     )
@@ -107,7 +123,9 @@ async def history_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     dest_name   = context.user_data["hist_dest_name"]
 
     status_msg = await update.message.reply_text(
-        f"⏳ Copying up to *{limit}* messages from *{source_name}* to *{dest_name}*…\n\n"
+        f"⏳ Copying up to *{limit}* messages from *{source_name}* to *{dest_name}*…
+
+"
         "_This may take a while for large batches. The bot stays responsive while copying._",
         parse_mode="Markdown"
     )
@@ -140,7 +158,7 @@ async def history_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
             album_order: list = []
 
             async def _flush_album(gid):
-                nonlocal copied, failed
+                nonlocal copied, skipped, failed
                 msgs_in = album_buf.pop(gid, [])
                 if gid in album_order:
                     album_order.remove(gid)
@@ -150,6 +168,8 @@ async def history_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                           caption_replacement=caption_replacement)
                 if result == "ok":
                     copied += len(msgs_in)
+                elif result == "skip":
+                    skipped += len(msgs_in)
                 else:
                     failed += len(msgs_in)
                 await asyncio.sleep(0.4)
@@ -212,11 +232,18 @@ async def history_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         status_icon = "✅" if failed == 0 else "⚠️"
         try:
             await bot.edit_message_text(
-                f"{status_icon} *History Copy Complete*\n\n"
-                f"✅ Copied  : `{copied:,}`\n"
-                f"⏭ Skipped : `{skipped:,}`\n"
-                f"❌ Failed  : `{failed:,}`\n\n"
-                f"📡 From: *{source_name}*\n"
+                f"{status_icon} *History Copy Complete*
+
+"
+                f"✅ Copied  : `{copied:,}`
+"
+                f"⏭ Skipped : `{skipped:,}`
+"
+                f"❌ Failed  : `{failed:,}`
+
+"
+                f"📡 From: *{source_name}*
+"
                 f"📥 To: *{dest_name}*",
                 chat_id=chat_id, message_id=msg_id,
                 parse_mode="Markdown",
