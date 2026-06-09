@@ -860,8 +860,8 @@ def _build_status_text(bot_data: dict) -> str:
             from userbot.checkpoint import exists as _ckpt_exists
             if _ckpt_exists(config.SOURCE_CHANNEL, config.DEST_CHANNEL):
                 lines.append(
-                    f"\n💾 *Checkpoint available* for configured channel pair.\n"
-                    f"_Use /resume to continue from last saved position._"
+                    "\n💾 *Checkpoint available* for configured channel pair.\n"
+                    "_Use /resume to continue from last saved position._"
                 )
 
     return "\n".join(lines)
@@ -1433,7 +1433,6 @@ async def config_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sync_opts = context.bot_data.get("active_sync_opts")
     if sync_opts:
         o_repl  = sync_opts.get("caption_replacement", config.CAPTION_REPLACE)
-        o_exts  = sync_opts.get("allowed_exts") or set()
         o_skip  = sync_opts.get("skip_text", config.SKIP_TEXT)
         o_label = sync_opts.get("filter_label", "ALL")
 
