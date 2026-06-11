@@ -38,6 +38,21 @@ from states import GENSESSION_2FA, GENSESSION_OTP, GENSESSION_PHONE
 
 logger = logging.getLogger(__name__)
 
+# Shown whenever Telegram rejects an auth key because two servers connected
+# simultaneously with the same session (common during Railway rolling deploys).
+_AUTH_KEY_DUPED_MSG = (
+    "❌ *Session conflict — two connections sharing the same key*\n\n"
+    "Telegram blocked the connection because the same session string is being used "
+    "from two different IPs at once. This usually happens when Railway starts a new "
+    "container before fully stopping the old one.\n\n"
+    "*Fix — choose one:*\n"
+    "① Go to [my.telegram.org](https://my.telegram.org) → *Active Sessions* → "
+    "*Terminate all other sessions*, wait 30 s, then /gensession again.\n"
+    "② In Railway: manually *stop* the current deployment, run /gensession to get "
+    "a fresh session string, paste it as `TELETHON\_SESSION`, then redeploy."
+)
+
+
 _RESEND_KB = InlineKeyboardMarkup([
     [InlineKeyboardButton("🔄 Resend code", callback_data="gs_resend")],
     [InlineKeyboardButton("❌ Cancel",       callback_data="gs_cancel")],
@@ -111,16 +126,28 @@ async def gensession_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     try:
+        from telethon.errors import AuthKeyDuplicatedError as _AKDE
+    except ImportError:
+        _AKDE = None
+    try:
         client = TelegramClient(StringSession(), int(api_id), api_hash)
         await client.connect()
     except Exception as e:
         logger.exception("gensession: could not connect fresh client")
-        await update.message.reply_text(
-            f"❌ *Could not connect to Telegram:* `{e}`\n\n"
-            "Check `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` and try again.",
-            parse_mode="Markdown",
-            reply_markup=_menu_kb(),
-        )
+        if _AKDE and isinstance(e, _AKDE):
+            await update.message.reply_text(
+                _AUTH_KEY_DUPED_MSG,
+                parse_mode="Markdown",
+                reply_markup=_menu_kb(),
+                disable_web_page_preview=True,
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ *Could not connect to Telegram:* `{e}`\n\n"
+                "Check `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` and try again.",
+                parse_mode="Markdown",
+                reply_markup=_menu_kb(),
+            )
         return ConversationHandler.END
 
     context.user_data[_KEY_CLIENT]   = client
@@ -165,24 +192,48 @@ async def gensession_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not client.is_connected():
         try:
+            from telethon.errors import AuthKeyDuplicatedError as _AKDE2
+        except ImportError:
+            _AKDE2 = None
+        try:
             await client.connect()
         except Exception as e:
-            await update.message.reply_text(
-                f"❌ *Reconnect failed:* `{e}`\n\nUse /gensession to try again.",
-                parse_mode="Markdown",
-                reply_markup=_menu_kb(),
-            )
+            if _AKDE2 and isinstance(e, _AKDE2):
+                await update.message.reply_text(
+                    _AUTH_KEY_DUPED_MSG,
+                    parse_mode="Markdown",
+                    reply_markup=_menu_kb(),
+                    disable_web_page_preview=True,
+                )
+            else:
+                await update.message.reply_text(
+                    f"❌ *Reconnect failed:* `{e}`\n\nUse /gensession to try again.",
+                    parse_mode="Markdown",
+                    reply_markup=_menu_kb(),
+                )
             await _cleanup(context)
             return ConversationHandler.END
 
     try:
+        from telethon.errors import AuthKeyDuplicatedError as _AKDE3
+    except ImportError:
+        _AKDE3 = None
+    try:
         sent = await client.send_code_request(phone)
     except Exception as e:
-        await update.message.reply_text(
-            f"❌ Could not send OTP: `{e}`\n\nCheck the number and try again.",
-            parse_mode="Markdown",
-            reply_markup=_menu_kb(),
-        )
+        if _AKDE3 and isinstance(e, _AKDE3):
+            await update.message.reply_text(
+                _AUTH_KEY_DUPED_MSG,
+                parse_mode="Markdown",
+                reply_markup=_menu_kb(),
+                disable_web_page_preview=True,
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ Could not send OTP: `{e}`\n\nCheck the number and try again.",
+                parse_mode="Markdown",
+                reply_markup=_menu_kb(),
+            )
         await _cleanup(context)
         return ConversationHandler.END
 
@@ -207,7 +258,7 @@ async def _do_resend(context: ContextTypes.DEFAULT_TYPE) -> tuple[bool, int]:
     client: TelegramClient = context.user_data.get(_KEY_CLIENT)
     phone  = context.user_data.get(_KEY_PHONE)
     try:
-        from telethon.errors import FloodWaitError
+        from telethon.errors import FloodWaitError, AuthKeyDuplicatedError
         sent = await client.send_code_request(phone)
         context.user_data[_KEY_SENT]     = sent
         context.user_data[_KEY_ATTEMPTS] = 0
