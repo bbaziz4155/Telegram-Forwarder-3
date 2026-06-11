@@ -222,6 +222,7 @@ def _default_opts(mode: str) -> dict:
         "filter_label":        "ALL",
         "allowed_exts":        set(config.ALLOWED_EXTS),
         "caption_replacement": config.CAPTION_REPLACE,
+        "caption_suffix":      "",
         "notify_every":        config.NOTIFY_EVERY if mode != "sync" else 0,
         "speed_idx":           0,                      # index into _SPEED_CYCLE
         "rate_delay":          _SPEED_CYCLE[0][1],     # seconds between sends
@@ -484,6 +485,8 @@ async def _launch_job(query, context: ContextTypes.DEFAULT_TYPE, opts: dict, src
             bot_data=context.bot_data,
         )
         # Persist job to disk BEFORE creating the task so a crash mid-start still saves state
+        # Inject user-configured caption suffix (set via /setcaption)
+        opts["caption_suffix"] = context.user_data.get("caption_suffix", "")
         _ar.save_resume(chat_id, src, dst, opts)
         task = asyncio.create_task(
             _run_copy(client, src, dst, opts, notifier, bot, chat_id, context.bot_data)
@@ -563,6 +566,7 @@ async def _run_copy(client, src, dst, opts, notifier, bot, chat_id, bot_data):
             client, src, dst,
             allowed_exts=opts["allowed_exts"],
             caption_replacement=opts["caption_replacement"],
+            caption_suffix=opts.get("caption_suffix", ""),
             notify_every=opts["notify_every"],
             skip_text=opts["skip_text"],
             notifier=notifier,
@@ -2259,6 +2263,59 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(page, parse_mode="Markdown")
 
 
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  /setcaption — set a custom suffix appended to every copied file's caption
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def setcaption_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    /setcaption <text>  — append <text> as a new line to every copied file caption.
+    /setcaption off     — remove the suffix (copy captions as-is).
+    /setcaption         — show what is currently set.
+
+    The suffix is stored in user_data so it survives bot restarts.
+    It is applied AFTER username replacement, so you can combine both:
+      CAPTION_REPLACE = "@YourChannel"  (replaces source @usernames)
+      /setcaption 📌 Join @YourChannel  (always appended at the bottom)
+    """
+    args = (context.args or [])
+    text = " ".join(args).strip()
+
+    if not text:
+        current = context.user_data.get("caption_suffix", "")
+        if current:
+            await update.message.reply_text(
+                f"📝 *Current caption suffix:*\n`{current}`\n\n"
+                "Use `/setcaption off` to remove it, or `/setcaption <text>` to change it.",
+                parse_mode="Markdown",
+            )
+        else:
+            await update.message.reply_text(
+                "📝 *No caption suffix set.*\n\n"
+                "Use `/setcaption <text>` to add a line to the bottom of every copied caption.\n"
+                "Example: `/setcaption 📌 @YourChannel`",
+                parse_mode="Markdown",
+            )
+        return
+
+    if text.lower() == "off":
+        context.user_data.pop("caption_suffix", None)
+        await update.message.reply_text(
+            "✅ Caption suffix *removed* — captions will be copied as-is.",
+            parse_mode="Markdown",
+        )
+        return
+
+    context.user_data["caption_suffix"] = text
+    await update.message.reply_text(
+        f"✅ Caption suffix set to:\n`{text}`\n\n"
+        "This line will be appended to the bottom of every copied file caption.\n"
+        "Takes effect on the next /copy (or /resume).",
+        parse_mode="Markdown",
+    )
+
 def get_extra_handlers() -> list:
     """Standalone command handlers registered outside the conversation."""
     return [
@@ -2273,6 +2330,7 @@ def get_extra_handlers() -> list:
         CommandHandler("config",        config_cmd),
         CommandHandler("speed",         speed_cmd),
         CommandHandler("stats",         stats_cmd),
+        CommandHandler("setcaption",    setcaption_cmd),
         # Bare callback handlers so these buttons work even when the user
         # is NOT inside the main-menu conversation (e.g. from /status output).
         # The conv's MAIN_MENU handlers take priority when the user IS in that
