@@ -18,8 +18,6 @@ async def init_db():
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        # Unique index — safe to run on both new and existing tables.
-        # Prevents duplicate (user, source, dest) rules accumulating in the DB.
         await db.execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS idx_fwd_rules_unique
             ON forward_rules(user_id, source_chat_id, dest_chat_id)
@@ -32,6 +30,34 @@ async def init_db():
                 chat_name TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
+        """)
+        # ── Persistent deduplication table ────────────────────────────────────
+        # Records every message that was successfully copied so that:
+        #   1. Re-running /copy on a finished channel skips already-sent msgs.
+        #   2. The same file re-uploaded in the source at a NEW message ID is
+        #      also detected and skipped via its Telegram document ID (doc_id).
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS copied_files (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_chat_id INTEGER NOT NULL,
+                dest_chat_id   INTEGER NOT NULL,
+                source_msg_id  INTEGER NOT NULL,
+                doc_id         INTEGER,
+                copied_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        # Unique on message ID — prevents double-copy of same message
+        await db.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_copied_msg
+            ON copied_files(source_chat_id, dest_chat_id, source_msg_id)
+        """)
+        # Unique on document/file ID — prevents double-copy of same file content.
+        # The WHERE clause makes it a partial index so NULL doc_ids (text posts)
+        # don't collide with each other.
+        await db.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_copied_doc
+            ON copied_files(source_chat_id, dest_chat_id, doc_id)
+            WHERE doc_id IS NOT NULL
         """)
         await db.commit()
 
@@ -46,7 +72,6 @@ async def add_rule(user_id: int, source_id: int, source_name: str, dest_id: int,
         await db.commit()
         if cursor.lastrowid:
             return cursor.lastrowid
-        # Rule already existed — return its id
         cur2 = await db.execute(
             "SELECT id FROM forward_rules WHERE user_id=? AND source_chat_id=? AND dest_chat_id=?",
             (user_id, source_id, dest_id)
@@ -122,3 +147,57 @@ async def get_all_ignore_entries() -> list:
             "SELECT user_id, chat_id FROM ignore_list"
         )
         return [dict(row) for row in await cursor.fetchall()]
+
+# ── Deduplication helpers ─────────────────────────────────────────────────────
+
+async def load_copied_ids(
+    source_chat_id: int, dest_chat_id: int
+) -> tuple[set[int], set[int]]:
+    """
+    Load all previously copied entries for a (source, dest) pair from the DB.
+
+    Returns:
+        msg_ids  — set of source message IDs already copied
+        doc_ids  — set of Telegram document IDs already copied (content dedup)
+
+    Called once at the start of copy_channel_files so the hot-path dedup
+    check is a pure in-memory set lookup (O(1), no DB round-trip per message).
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT source_msg_id, doc_id FROM copied_files "
+            "WHERE source_chat_id=? AND dest_chat_id=?",
+            (source_chat_id, dest_chat_id),
+        )
+        msg_ids: set[int] = set()
+        doc_ids: set[int] = set()
+        async for row in cursor:
+            msg_ids.add(row[0])
+            if row[1] is not None:
+                doc_ids.add(row[1])
+        return msg_ids, doc_ids
+
+
+async def mark_copied_batch(
+    source_chat_id: int,
+    dest_chat_id: int,
+    entries: list[tuple[int, "int | None"]],
+) -> None:
+    """
+    Persist a batch of (source_msg_id, doc_id) pairs to the DB.
+
+    Uses INSERT OR IGNORE so concurrent or repeated calls are safe.
+    Called every SAVE_EVERY messages and once at job completion.
+
+    entries: list of (source_msg_id, doc_id_or_None)
+    """
+    if not entries:
+        return
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.executemany(
+            "INSERT OR IGNORE INTO copied_files "
+            "(source_chat_id, dest_chat_id, source_msg_id, doc_id) "
+            "VALUES (?,?,?,?)",
+            [(source_chat_id, dest_chat_id, msg_id, doc_id) for msg_id, doc_id in entries],
+        )
+        await db.commit()
