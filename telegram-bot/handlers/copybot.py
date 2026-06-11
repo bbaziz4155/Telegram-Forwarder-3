@@ -2320,6 +2320,221 @@ async def setcaption_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         parse_mode="Markdown",
     )
 
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  /cleancaptions — bulk-edit existing destination channel messages to strip
+#  watermark lines (e.g. "FILE ADDED BY GOUTHAM SER ❤️") from their captions.
+#  Uses the same STRIP_PATTERNS from config.py as the copy engine does.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_CC_CANCEL_KEY = "cleancaptions_cancel"
+
+
+async def _run_cleancaptions(client, dest_entity, bot, chat_id, status_msg_id, bot_data):
+    """
+    Background task: iterate every message in dest_entity and edit any caption
+    that contains a line matching config.STRIP_PATTERNS or _WATERMARK_RE.
+    Reports progress via Telegram message edits.
+    """
+    from telethon.errors import (
+        FloodWaitError,
+        MessageNotModifiedError,
+        MessageIdInvalidError,
+        ChatAdminRequiredError,
+    )
+    from userbot.filter_utils import clean_caption
+
+    scanned = edited = skipped = errors = 0
+    last_edit = time.time()
+
+    async def _update(done: bool = False):
+        nonlocal last_edit
+        now = time.time()
+        if not done and now - last_edit < 4:
+            return
+        last_edit = now
+        icon = "✅" if done else "🧹"
+        suffix = "" if done else "\n\nSend /stopcleaning to cancel."
+        try:
+            await bot.edit_message_text(
+                f"{icon} *Caption Cleaner*\n\n"
+                f"📋 Scanned : `{scanned:,}`\n"
+                f"✏️  Edited  : `{edited:,}`\n"
+                f"⏭  Skipped : `{skipped:,}`\n"
+                f"❌ Errors  : `{errors:,}`"
+                f"{suffix}",
+                chat_id=chat_id,
+                message_id=status_msg_id,
+                parse_mode="Markdown",
+            )
+        except Exception:
+            pass
+
+    try:
+        async for msg in client.iter_messages(dest_entity, reverse=True):
+            # Cancellation check
+            if bot_data.get(_CC_CANCEL_KEY):
+                bot_data[_CC_CANCEL_KEY] = False
+                await _update(done=False)
+                try:
+                    await bot.edit_message_text(
+                        f"🛑 *Caption cleaning cancelled.*\n\n"
+                        f"📋 Scanned `{scanned:,}` · ✏️ Edited `{edited:,}`",
+                        chat_id=chat_id,
+                        message_id=status_msg_id,
+                        parse_mode="Markdown",
+                    )
+                except Exception:
+                    pass
+                return
+
+            scanned += 1
+
+            # Only messages with a text/caption are candidates
+            raw = msg.message
+            if not raw:
+                skipped += 1
+                await asyncio.sleep(0)
+                continue
+
+            # Run through the same cleaner the copy engine uses
+            cleaned = clean_caption(raw, replacement="")
+
+            if cleaned == raw.strip():
+                skipped += 1
+                await asyncio.sleep(0)
+                continue
+
+            # Caption changed — attempt to edit the message in-place
+            retries = 0
+            while retries < 3:
+                try:
+                    await client.edit_message(
+                        dest_entity,
+                        msg.id,
+                        text=cleaned,
+                        parse_mode="md",
+                    )
+                    edited += 1
+                    break
+                except FloodWaitError as fw:
+                    await asyncio.sleep(fw.seconds + 2)
+                except (MessageNotModifiedError, MessageIdInvalidError):
+                    skipped += 1
+                    break
+                except ChatAdminRequiredError:
+                    errors += 1
+                    await bot.send_message(
+                        chat_id,
+                        "❌ *Caption Cleaner stopped:* the userbot doesn't have "
+                        "permission to edit messages in the destination channel.\n\n"
+                        "Make sure the userbot is an admin with *Edit Messages* permission.",
+                        parse_mode="Markdown",
+                    )
+                    return
+                except Exception:
+                    retries += 1
+                    if retries >= 3:
+                        errors += 1
+                    await asyncio.sleep(1)
+
+            await _update()
+            await asyncio.sleep(0.05)   # gentle pacing — ~20 edits/sec max
+
+    finally:
+        bot_data.pop(_CC_CANCEL_KEY, None)
+        bot_data["active_cleancaptions_task"] = None
+
+    await _update(done=True)
+
+
+async def cleancaptions_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    /cleancaptions — scan the destination channel and strip watermark lines
+    (e.g. "FILE ADDED BY GOUTHAM SER ❤️") from the captions of all existing
+    messages.  Uses the same STRIP_PATTERNS from config.py as /copy does.
+
+    Progress is shown live in a Telegram message.
+    Send /stopcleaning to cancel mid-run.
+    """
+    bot_data = context.bot_data
+
+    # Only one cleaner at a time
+    existing = bot_data.get("active_cleancaptions_task")
+    if existing and not existing.done():
+        await update.message.reply_text(
+            "⚠️ *Caption cleaner is already running.*\n\n"
+            "Send /stopcleaning to cancel it first.",
+            parse_mode="Markdown",
+        )
+        return
+
+    if not bridge.is_ready(bot_data):
+        await update.message.reply_text(
+            _not_ready(bridge.is_locked(bot_data)), parse_mode="Markdown"
+        )
+        return
+
+    client = bridge.get_client(bot_data)
+    dest   = config.DEST_CHANNEL
+
+    if not dest:
+        await update.message.reply_text(
+            "❌ *DEST\_CHANNEL not set in config.py.*\n\n"
+            "Set it to the channel ID of your destination channel.",
+            parse_mode="Markdown",
+        )
+        return
+
+    try:
+        dest_entity = await client.get_entity(dest)
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ Could not resolve destination channel:\n`{e}`",
+            parse_mode="Markdown",
+        )
+        return
+
+    status = await update.message.reply_text(
+        "🧹 *Caption Cleaner starting…*\n\n"
+        "Scanning destination channel for captions to clean.\n"
+        "_This may take a while for large channels._\n\n"
+        "Send /stopcleaning to cancel.",
+        parse_mode="Markdown",
+    )
+
+    chat_id = update.effective_chat.id
+    bot_data[_CC_CANCEL_KEY] = False
+
+    task = asyncio.create_task(
+        _run_cleancaptions(
+            client, dest_entity,
+            context.application.bot, chat_id, status.message_id,
+            bot_data,
+        )
+    )
+    bot_data["active_cleancaptions_task"] = task
+
+
+async def stopcleaning_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    /stopcleaning — cancel a running /cleancaptions job.
+    """
+    bot_data = context.bot_data
+    task = bot_data.get("active_cleancaptions_task")
+    if task and not task.done():
+        bot_data[_CC_CANCEL_KEY] = True
+        await update.message.reply_text(
+            "🛑 Cancelling caption cleaner… it will stop after the current message.",
+            parse_mode="Markdown",
+        )
+    else:
+        await update.message.reply_text(
+            "ℹ️ No caption cleaner is running.",
+            parse_mode="Markdown",
+        )
+
 def get_extra_handlers() -> list:
     """Standalone command handlers registered outside the conversation."""
     return [
@@ -2335,6 +2550,8 @@ def get_extra_handlers() -> list:
         CommandHandler("speed",         speed_cmd),
         CommandHandler("stats",         stats_cmd),
         CommandHandler("setcaption",    setcaption_cmd),
+        CommandHandler("cleancaptions", cleancaptions_cmd),
+        CommandHandler("stopcleaning",  stopcleaning_cmd),
         # Bare callback handlers so these buttons work even when the user
         # is NOT inside the main-menu conversation (e.g. from /status output).
         # The conv's MAIN_MENU handlers take priority when the user IS in that
