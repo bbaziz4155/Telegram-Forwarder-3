@@ -957,15 +957,14 @@ async def resume_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if _ckpt_exists(config.SOURCE_CHANNEL, config.DEST_CHANNEL):
             src = config.SOURCE_CHANNEL
             dst = config.DEST_CHANNEL
-            opts = {
+            opts = _default_opts("copy")
+            # Override with live config values (may have changed since last run)
+            opts.update({
                 "allowed_exts":        set(config.ALLOWED_EXTS),
                 "caption_replacement": config.CAPTION_REPLACE,
-                "caption_suffix":      "",
                 "notify_every":        config.NOTIFY_EVERY,
                 "skip_text":           bool(config.SKIP_TEXT),
-                "rate_delay":          _SPEED_CYCLE[0][1],   # Safe speed
-                "filter_label":        "ALL",
-            }
+            })
 
     if src is None:
         await update.message.reply_text(
@@ -975,6 +974,10 @@ async def resume_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown",
         )
         return
+
+    # Backfill any keys added to _default_opts after this save file was created.
+    # Prevents KeyError when new opts keys are accessed on old save files.
+    opts = {**_default_opts(opts.get("mode", "copy")), **opts}
 
     # ── Load checkpoint stats for the confirmation message ───────────────────
     from userbot.checkpoint import load as _ckpt_load
