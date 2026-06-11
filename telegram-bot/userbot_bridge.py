@@ -11,6 +11,8 @@ import asyncio
 import logging
 import os
 
+import config  # for OWNER_ID in revocation alerts
+
 logger = logging.getLogger(__name__)
 
 API_ID        = int(os.environ.get("TELEGRAM_API_ID",   "0"))
@@ -21,6 +23,49 @@ SESSION_PATH  = os.path.join(os.path.dirname(__file__), "sessions", "userbot")
 _FAST_RETRIES = 12
 _FAST_DELAY   = 5
 _SLOW_DELAY   = 30
+
+
+async def _send_revocation_alert(bot_data: dict, during_copy: bool) -> None:
+    """
+    Send a Telegram alert to the owner (and the copy chat if different)
+    when Telegram revokes the userbot session.
+    """
+    ptb_bot  = bot_data.get("_ptb_bot")
+    owner_id = bot_data.get("_owner_id", 0)
+
+    if not ptb_bot or not owner_id:
+        logger.warning("Session revoked but cannot alert — _ptb_bot or _owner_id not set.")
+        return
+
+    # Prefer notifying whichever chat started the copy job, fallback to owner
+    notify_chat = bot_data.get("active_copy_chat_id") or owner_id
+
+    if during_copy:
+        text = (
+            "⚠️ *Userbot Session Revoked Mid\\-Copy\\!*\n\n"
+            "Telegram kicked your session and the copy job was automatically stopped\\.\n\n"
+            "*To resume:*\n"
+            "1\\. Run /gensession to generate a new session string\n"
+            "2\\. Set `SESSION_STRING` in Railway with the new value\n"
+            "3\\. Wait for Railway to redeploy \\(\\~30 seconds\\)\n"
+            "4\\. Run /resume to pick up exactly where you left off\n\n"
+            "_Tip: Running at 🛡 Safe speed reduces how often Telegram revokes sessions\\._"
+        )
+    else:
+        text = (
+            "⚠️ *Userbot Session Revoked*\n\n"
+            "Telegram invalidated your session\\. The userbot is now disconnected\\.\n\n"
+            "Run /gensession to reconnect\\."
+        )
+
+    chats_notified = set()
+    for chat_id in {notify_chat, owner_id}:
+        if chat_id and chat_id not in chats_notified:
+            try:
+                await ptb_bot.send_message(chat_id, text, parse_mode="MarkdownV2")
+                chats_notified.add(chat_id)
+            except Exception as e:
+                logger.error("Revocation alert to %s failed: %s", chat_id, e)
 
 
 async def _connect_loop(bot_data: dict) -> None:
@@ -67,9 +112,6 @@ async def _connect_loop(bot_data: dict) -> None:
         attempt += 1
         client = None
         try:
-            # Validate SESSION_STRING before using it.  An invalid/malformed
-            # string raises an exception in StringSession(); we catch it here
-            # and fall back to the file session so /login can still work.
             if SESSION_STRING:
                 try:
                     session = StringSession(SESSION_STRING)
@@ -86,19 +128,11 @@ async def _connect_loop(bot_data: dict) -> None:
 
             client = TelegramClient(session, API_ID, API_HASH)
 
-            # ── Set the client BEFORE connect ──────────────────────────────
-            # This is the critical fix: if connect() raises (bad session,
-            # network error) bot_data["userbot_client"] is already set, so
-            # login_start() won't show "still initialising" forever.
-            # login_phone() handles the "disconnected" case by reconnecting.
             bot_data["userbot_client"] = client
             bot_data["userbot_reason"] = "connecting"
             bot_data.pop("userbot_locked", None)
 
-            # Silently absorb flood waits up to 5 minutes (e.g. during
-            # iter_messages GET phase).  Waits longer than this are raised
-            # as FloodWaitError so the copy notifier can inform the user.
-            client.flood_sleep_threshold = 0  # 0 = always raise FloodWaitError so on_flood_wait is called and the counter/display stay accurate
+            client.flood_sleep_threshold = 0
 
             await client.connect()
 
@@ -109,7 +143,6 @@ async def _connect_loop(bot_data: dict) -> None:
                 bot_data["userbot_ready"]  = False
                 bot_data["userbot_reason"] = "needs_login"
 
-                # Poll every 10 s until the user completes the in-bot login.
                 authorised = False
                 while True:
                     await asyncio.sleep(10)
@@ -146,14 +179,15 @@ async def _connect_loop(bot_data: dict) -> None:
                         bot_data["userbot_reason"] = "reconnecting"
                         break
                     if not await client.is_user_authorized():
-                        logger.warning("Userbot session deauthorised — reconnecting…")
+                        logger.warning("Userbot session deauthorised — sending alert…")
                         bot_data["userbot_reason"] = "auth_failed"
-                        # Session was revoked server-side: cancel any in-flight copy
-                        if _cancel_copy_task(bot_data):
+                        copy_was_running = _cancel_copy_task(bot_data)
+                        if copy_was_running:
                             bot_data["session_lost_during_copy"] = True
                             logger.warning(
                                 "Active copy task cancelled because session was deauthorised."
                             )
+                        await _send_revocation_alert(bot_data, during_copy=copy_was_running)
                         break
                 except Exception as e:
                     logger.warning(f"Userbot health-check failed: {e} — reconnecting…")
@@ -190,9 +224,11 @@ async def _connect_loop(bot_data: dict) -> None:
             elif _is_auth_error(e):
                 logger.error(f"Userbot auth error (session invalid/revoked): {e}")
                 bot_data["userbot_reason"] = "auth_failed"
-                if _cancel_copy_task(bot_data):
+                copy_was_running = _cancel_copy_task(bot_data)
+                if copy_was_running:
                     bot_data["session_lost_during_copy"] = True
                     logger.warning("Active copy task cancelled due to auth error.")
+                await _send_revocation_alert(bot_data, during_copy=copy_was_running)
                 await asyncio.sleep(_SLOW_DELAY)
             else:
                 logger.error(f"Userbot connect failed: {e}")
@@ -208,6 +244,10 @@ async def init_userbot(application) -> None:
     bot_data.setdefault("active_sync_handler", None)
     bot_data.setdefault("active_copy_stats",   {})
     bot_data.setdefault("userbot_ready",       False)
+
+    # Store PTB bot + owner ID so the background connect loop can send alerts
+    bot_data["_ptb_bot"]  = application.bot
+    bot_data["_owner_id"] = config.OWNER_ID
 
     if not API_ID or not API_HASH:
         logger.warning("TELEGRAM_API_ID/HASH not set — userbot commands disabled")
@@ -227,9 +267,7 @@ def is_ready(bot_data: dict) -> bool:
 
 
 def is_starting_up(bot_data: dict) -> bool:
-    """True while the bridge is actively connecting/reconnecting.
-    Use this to show "wait a few seconds" instead of "not connected".
-    """
+    """True while the bridge is actively connecting/reconnecting."""
     return bot_data.get("userbot_reason", "") in ("connecting", "reconnecting")
 
 
