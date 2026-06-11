@@ -10,7 +10,7 @@ from telegram.ext import (
 )
 import database as db
 import config
-from states import MAIN_MENU, ADMIN_MGMT, ADMIN_AWAIT_ID
+from states import ADMIN_MGMT, ADMIN_AWAIT_ID
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +80,6 @@ async def admin_add_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if new_id == config.OWNER_ID:
         await update.message.reply_text("👑 That's the owner — already has full access.")
     else:
-        # Try to get the username if the user has interacted with the bot
         username = None
         try:
             member = await context.bot.get_chat(new_id)
@@ -110,7 +109,7 @@ async def admin_remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         target_id = int(query.data.split("_")[-1])
     except (ValueError, IndexError):
-        await query.answer()
+        await query.answer("Invalid selection.", show_alert=True)
         return ADMIN_MGMT
 
     if target_id == config.OWNER_ID:
@@ -129,6 +128,25 @@ async def admin_remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ADMIN_MGMT
 
 
+async def _back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Exit admin conv and show the main menu inline keyboard."""
+    from handlers.menu import MAIN_MENU_TEXT, main_menu_keyboard
+    import userbot_bridge as bridge
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(
+        MAIN_MENU_TEXT,
+        parse_mode="Markdown",
+        reply_markup=main_menu_keyboard(bridge.is_ready(context.bot_data)),
+    )
+    return ConversationHandler.END
+
+
+async def _cancel_conv(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """End the admin conv on /cancel."""
+    return ConversationHandler.END
+
+
 def build_admin_conv():
     return ConversationHandler(
         entry_points=[
@@ -138,16 +156,17 @@ def build_admin_conv():
             ADMIN_MGMT: [
                 CallbackQueryHandler(admin_add_start, pattern="^admin_add$"),
                 CallbackQueryHandler(admin_remove,    pattern=r"^admin_rm_\d+$"),
-                CallbackQueryHandler(lambda u, c: (u.callback_query.answer(), MAIN_MENU)[1],
-                                     pattern="^menu$"),
+                CallbackQueryHandler(_back_to_menu,   pattern="^menu$"),
             ],
             ADMIN_AWAIT_ID: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, admin_add_id),
-                CallbackQueryHandler(admin_menu, pattern="^admin_mgmt$"),
+                CallbackQueryHandler(admin_menu,    pattern="^admin_mgmt$"),
+                CallbackQueryHandler(_back_to_menu, pattern="^menu$"),
             ],
         },
         fallbacks=[
-            CommandHandler("cancel", lambda u, c: ConversationHandler.END),
+            CommandHandler("cancel", _cancel_conv),
+            CommandHandler("start",  _cancel_conv),
         ],
         allow_reentry=True,
         per_chat=False,
