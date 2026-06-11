@@ -31,11 +31,6 @@ async def init_db():
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        # ── Persistent deduplication table ────────────────────────────────────
-        # Records every message that was successfully copied so that:
-        #   1. Re-running /copy on a finished channel skips already-sent msgs.
-        #   2. The same file re-uploaded in the source at a NEW message ID is
-        #      also detected and skipped via its Telegram document ID (doc_id).
         await db.execute("""
             CREATE TABLE IF NOT EXISTS copied_files (
                 id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -46,20 +41,28 @@ async def init_db():
                 copied_at      DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        # Unique on message ID — prevents double-copy of same message
         await db.execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS idx_copied_msg
             ON copied_files(source_chat_id, dest_chat_id, source_msg_id)
         """)
-        # Unique on document/file ID — prevents double-copy of same file content.
-        # The WHERE clause makes it a partial index so NULL doc_ids (text posts)
-        # don't collide with each other.
         await db.execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS idx_copied_doc
             ON copied_files(source_chat_id, dest_chat_id, doc_id)
             WHERE doc_id IS NOT NULL
         """)
+        # ── Admins table ───────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS admins (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id    INTEGER UNIQUE NOT NULL,
+                username   TEXT,
+                added_by   INTEGER,
+                added_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         await db.commit()
+
+# ── Forward rules ─────────────────────────────────────────────────────────────
 
 async def add_rule(user_id: int, source_id: int, source_name: str, dest_id: int, dest_name: str) -> int:
     async with aiosqlite.connect(DB_PATH) as db:
@@ -105,8 +108,9 @@ async def get_all_active_rules() -> list:
         )
         return [dict(row) for row in await cursor.fetchall()]
 
+# ── Ignore list ───────────────────────────────────────────────────────────────
+
 async def add_ignore(user_id: int, chat_id: int, chat_name: str) -> bool:
-    """Returns True if added, False if already in list."""
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             "SELECT id FROM ignore_list WHERE user_id=? AND chat_id=?",
@@ -140,64 +144,96 @@ async def remove_ignore(ignore_id: int, user_id: int) -> bool:
         return cursor.rowcount > 0
 
 async def get_all_ignore_entries() -> list:
-    """Load every ignore-list entry across all users — used to build the in-memory ignore_map."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT * FROM ignore_list")
+        return [dict(row) for row in await cursor.fetchall()]
+
+# ── Dedup (copied files) ──────────────────────────────────────────────────────
+
+async def mark_copied(source_chat_id: int, dest_chat_id: int, source_msg_id: int, doc_id: int = None):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO copied_files "
+            "(source_chat_id, dest_chat_id, source_msg_id, doc_id) VALUES (?,?,?,?)",
+            (source_chat_id, dest_chat_id, source_msg_id, doc_id)
+        )
+        await db.commit()
+
+async def get_copied_ids(source_chat_id: int, dest_chat_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            "SELECT user_id, chat_id FROM ignore_list"
-        )
-        return [dict(row) for row in await cursor.fetchall()]
-
-# ── Deduplication helpers ─────────────────────────────────────────────────────
-
-async def load_copied_ids(
-    source_chat_id: int, dest_chat_id: int
-) -> tuple[set[int], set[int]]:
-    """
-    Load all previously copied entries for a (source, dest) pair from the DB.
-
-    Returns:
-        msg_ids  — set of source message IDs already copied
-        doc_ids  — set of Telegram document IDs already copied (content dedup)
-
-    Called once at the start of copy_channel_files so the hot-path dedup
-    check is a pure in-memory set lookup (O(1), no DB round-trip per message).
-    """
-    async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute(
             "SELECT source_msg_id, doc_id FROM copied_files "
             "WHERE source_chat_id=? AND dest_chat_id=?",
-            (source_chat_id, dest_chat_id),
+            (source_chat_id, dest_chat_id)
         )
-        msg_ids: set[int] = set()
-        doc_ids: set[int] = set()
-        async for row in cursor:
-            msg_ids.add(row[0])
-            if row[1] is not None:
-                doc_ids.add(row[1])
-        return msg_ids, doc_ids
+        rows = await cursor.fetchall()
+    msg_ids = {r["source_msg_id"] for r in rows}
+    doc_ids = {r["doc_id"] for r in rows if r["doc_id"] is not None}
+    return msg_ids, doc_ids
 
-
-async def mark_copied_batch(
-    source_chat_id: int,
-    dest_chat_id: int,
-    entries: list[tuple[int, "int | None"]],
-) -> None:
-    """
-    Persist a batch of (source_msg_id, doc_id) pairs to the DB.
-
-    Uses INSERT OR IGNORE so concurrent or repeated calls are safe.
-    Called every SAVE_EVERY messages and once at job completion.
-
-    entries: list of (source_msg_id, doc_id_or_None)
-    """
-    if not entries:
+async def mark_copied_batch(source_chat_id: int, dest_chat_id: int, batch: list):
+    if not batch:
         return
     async with aiosqlite.connect(DB_PATH) as db:
         await db.executemany(
             "INSERT OR IGNORE INTO copied_files "
-            "(source_chat_id, dest_chat_id, source_msg_id, doc_id) "
-            "VALUES (?,?,?,?)",
-            [(source_chat_id, dest_chat_id, msg_id, doc_id) for msg_id, doc_id in entries],
+            "(source_chat_id, dest_chat_id, source_msg_id, doc_id) VALUES (?,?,?,?)",
+            [(source_chat_id, dest_chat_id, msg_id, doc_id) for msg_id, doc_id in batch]
+        )
+        await db.commit()
+
+async def get_copied_count(source_chat_id: int, dest_chat_id: int) -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT COUNT(*) FROM copied_files WHERE source_chat_id=? AND dest_chat_id=?",
+            (source_chat_id, dest_chat_id)
+        )
+        row = await cur.fetchone()
+        return row[0] if row else 0
+
+# ── Admin management ──────────────────────────────────────────────────────────
+
+async def load_admin_ids() -> set:
+    """Return a set of all admin user_ids from the DB (does NOT include the owner)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT user_id FROM admins")
+        rows = await cur.fetchall()
+    return {r[0] for r in rows}
+
+async def list_admins() -> list:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM admins ORDER BY added_at ASC"
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+async def add_admin(user_id: int, username: str = None, added_by: int = None) -> bool:
+    """Returns True if added, False if already exists."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT id FROM admins WHERE user_id=?", (user_id,))
+        if await cur.fetchone() is not None:
+            return False
+        await db.execute(
+            "INSERT INTO admins (user_id, username, added_by) VALUES (?,?,?)",
+            (user_id, username, added_by)
+        )
+        await db.commit()
+        return True
+
+async def remove_admin(user_id: int) -> bool:
+    """Returns True if removed."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("DELETE FROM admins WHERE user_id=?", (user_id,))
+        await db.commit()
+        return cur.rowcount > 0
+
+async def update_admin_username(user_id: int, username: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE admins SET username=? WHERE user_id=?",
+            (username, user_id)
         )
         await db.commit()
