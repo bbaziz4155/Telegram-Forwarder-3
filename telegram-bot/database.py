@@ -50,7 +50,6 @@ async def init_db():
             ON copied_files(source_chat_id, dest_chat_id, doc_id)
             WHERE doc_id IS NOT NULL
         """)
-        # ── Admins table ───────────────────────────────────────────────────────
         await db.execute("""
             CREATE TABLE IF NOT EXISTS admins (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -103,9 +102,7 @@ async def delete_rule(rule_id: int, user_id: int) -> bool:
 async def get_all_active_rules() -> list:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT * FROM forward_rules WHERE active=1"
-        )
+        cursor = await db.execute("SELECT * FROM forward_rules WHERE active=1")
         return [dict(row) for row in await cursor.fetchall()]
 
 # ── Ignore list ───────────────────────────────────────────────────────────────
@@ -160,7 +157,10 @@ async def mark_copied(source_chat_id: int, dest_chat_id: int, source_msg_id: int
         )
         await db.commit()
 
-async def get_copied_ids(source_chat_id: int, dest_chat_id: int):
+async def load_copied_ids(source_chat_id: int, dest_chat_id: int):
+    """Return (msg_id_set, doc_id_set) for a source→dest pair.
+    Named load_copied_ids to match the import in userbot/forwarder.py.
+    """
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
@@ -205,9 +205,7 @@ async def load_admin_ids() -> set:
 async def list_admins() -> list:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        cur = await db.execute(
-            "SELECT * FROM admins ORDER BY added_at ASC"
-        )
+        cur = await db.execute("SELECT * FROM admins ORDER BY added_at ASC")
         return [dict(r) for r in await cur.fetchall()]
 
 async def add_admin(user_id: int, username: str = None, added_by: int = None) -> bool:
