@@ -46,9 +46,13 @@ def main():
     # On Replit this port may be unavailable; the server gracefully skips.
     _start_health_server()
 
-    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    # Support both BOT_TOKEN (Railway convention) and TELEGRAM_BOT_TOKEN
+    token = os.environ.get("BOT_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN")
     if not token:
-        logger.error("TELEGRAM_BOT_TOKEN is not set — bot will not start")
+        logger.error(
+            "Neither BOT_TOKEN nor TELEGRAM_BOT_TOKEN is set — bot will not start. "
+            "Set BOT_TOKEN in your Railway environment variables."
+        )
         # Keep the process alive so the health check keeps passing
         threading.Event().wait()
         return
