@@ -21,7 +21,7 @@ from . import checkpoint as ckpt
 from .sender import send_album, _do_send
 from .filter_utils import matches_filter
 from .notifier import ProgressNotifier
-from ..database import load_copied_ids, mark_copied_batch
+from database import load_copied_ids, mark_copied_batch
 
 colorama_init(autoreset=True)
 logger = logging.getLogger(__name__)
