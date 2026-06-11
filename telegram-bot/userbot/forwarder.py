@@ -21,6 +21,7 @@ from . import checkpoint as ckpt
 from .sender import send_album, _do_send
 from .filter_utils import matches_filter
 from .notifier import ProgressNotifier
+from ..database import load_copied_ids, mark_copied_batch
 
 colorama_init(autoreset=True)
 logger = logging.getLogger(__name__)
@@ -340,6 +341,13 @@ async def copy_channel_files(
     state       = ckpt.load(source_id, dest_id)
     resume_from = state["last_msg_id"]
 
+    # Load persistent dedup sets from SQLite (survives job restarts / re-runs).
+    # db_msg_ids  — source message IDs already copied in ANY previous run
+    # db_doc_ids  — Telegram document IDs already copied (catches re-uploads)
+    db_msg_ids, db_doc_ids = await load_copied_ids(source_id, dest_id)
+    state["copied_ids"].update(db_msg_ids)  # merge with checkpoint gap-IDs
+    _pending_db: list = []  # (msg_id, doc_id) batch for DB flush
+
     if resume_from > 0 and not force_restart:
         _ok(f"♻️   Resuming from msg ID {resume_from} "
             f"(already copied: {state['copied']:,})")
@@ -419,6 +427,10 @@ async def copy_channel_files(
             state["last_msg_id"] = max(state["last_msg_id"], msgs[-1].id)
             for m in msgs:
                 state["copied_ids"].add(m.id)
+                _doc = getattr(getattr(m, "file", None), "id", None)
+                if _doc:
+                    db_doc_ids.add(_doc)
+                _pending_db.append((m.id, _doc))
             await notifier.tick(copied, skipped, failed, total, source_name, dest_name)
         elif result == "fail":
             failed += n
@@ -480,6 +492,8 @@ async def copy_channel_files(
                                   "failed": failed, "flood_waits": flood_waits})
                     ckpt.save(source_id, dest_id, state)
                     last_save = now
+                    await mark_copied_batch(source_id, dest_id, _pending_db)
+                    _pending_db.clear()
                 await asyncio.sleep(0)  # yield without rate-limit delay
                 continue
 
@@ -491,8 +505,12 @@ async def copy_channel_files(
                     pbar.update(n or 1)
                     _update_pbar(pbar, copied, skipped, failed, flood_waits)
 
-                # Duplicate check — skip if already copied in a previous run
-                if message.id in state["copied_ids"]:
+                # Duplicate check — skip if already copied in a previous run.
+                # Two layers: message ID (same msg) OR document ID (same file
+                # re-uploaded at a different message ID in the source channel).
+                _msg_doc_id = getattr(getattr(message, "file", None), "id", None)
+                if (message.id in state["copied_ids"]
+                        or (_msg_doc_id and _msg_doc_id in db_doc_ids)):
                     skipped += 1
                     pbar.update(1)
                     _update_pbar(pbar, copied, skipped, failed, flood_waits)
@@ -519,6 +537,9 @@ async def copy_channel_files(
                     copied += 1
                     state["last_msg_id"] = message.id
                     state["copied_ids"].add(message.id)
+                    if _msg_doc_id:
+                        db_doc_ids.add(_msg_doc_id)
+                    _pending_db.append((message.id, _msg_doc_id))
                 elif result == "skip":
                     skipped += 1
                 else:
@@ -539,6 +560,8 @@ async def copy_channel_files(
                               "failed": failed, "flood_waits": flood_waits})
                 ckpt.save(source_id, dest_id, state)
                 last_save = now
+                await mark_copied_batch(source_id, dest_id, _pending_db)
+                _pending_db.clear()
 
             await asyncio.sleep(rate_delay() if callable(rate_delay) else rate_delay)
 
@@ -579,6 +602,10 @@ async def copy_channel_files(
                 pass
 
     pbar.close()
+
+    # Final flush of any pending dedup records to SQLite
+    await mark_copied_batch(source_id, dest_id, _pending_db)
+    _pending_db.clear()
 
     state.update({"copied": copied, "skipped": skipped,
                   "failed": failed, "flood_waits": flood_waits})
