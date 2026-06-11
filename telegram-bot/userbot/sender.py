@@ -57,6 +57,7 @@ async def _do_send(
     message,
     dry_run: bool = False,
     caption_replacement: str = "",
+    caption_suffix: str = "",
     on_flood_wait=None,
 ) -> str:
     """
@@ -76,6 +77,8 @@ async def _do_send(
         return "skip"
 
     caption  = _cleaned(message.message, caption_replacement)
+    if caption_suffix:
+        caption = (caption + "\n" + caption_suffix).strip() if caption else caption_suffix
     attempts = 0
 
     while True:
@@ -108,6 +111,8 @@ async def _do_send(
                 refreshed = await client.get_messages(message.chat_id, ids=message.id)
                 if refreshed and refreshed.media:
                     cap = _cleaned(refreshed.message, caption_replacement)
+                    if caption_suffix:
+                        cap = (cap + "\n" + caption_suffix).strip() if cap else caption_suffix
                     await client.send_file(dest, file=refreshed.media,
                                            caption=cap, parse_mode="md",
                                            force_document=False)
@@ -143,6 +148,7 @@ async def send_album(
     messages: list,
     dry_run: bool = False,
     caption_replacement: str = "",
+    caption_suffix: str = "",
     on_flood_wait=None,
 ) -> str:
     """
@@ -166,12 +172,17 @@ async def send_album(
             raw_caption = msg.message
 
     caption = _cleaned(raw_caption, caption_replacement)
+    if caption_suffix:
+        caption = (caption + "\n" + caption_suffix).strip() if caption else caption_suffix
 
     if not files:
         for msg in messages:
             if msg.message:
                 try:
-                    await client.send_message(dest, _cleaned(msg.message, caption_replacement))
+                    _txt = _cleaned(msg.message, caption_replacement)
+                    if caption_suffix:
+                        _txt = (_txt + "\n" + caption_suffix).strip() if _txt else caption_suffix
+                    await client.send_message(dest, _txt)
                     return "ok"
                 except Exception:
                     pass
