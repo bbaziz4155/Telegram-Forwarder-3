@@ -43,8 +43,10 @@ SKIP_TEXT = False
 #   "Latest Movies - Master Print Downloader📂(MPD)5.0"
 #   "Movie Request Group - MPD Requested Movies Zone 3.0📂"
 #   "🔗 CHANNEL LINK 👉 https://t.me/..."
+#   "FILE ADDED BY GOUTHAM SER ❤️"
 STRIP_PATTERNS: list = [
     r"master\s+print\s+download",   # Master Print Downloader (MPD) promo
     r"movie\s+request\s+group",     # Movie Request Group promo
     r"channel\s+link",              # "CHANNEL LINK 👉" lines
+    r"file\s+added\s+by\s+goutham", # "FILE ADDED BY GOUTHAM SER ❤️" watermark
 ]
