@@ -46,7 +46,7 @@ telegram-bot/           ← working directory (on sys.path at runtime)
 
 | Variable | Description |
 |---|---|
-| `TELETHON_SESSION` | Base64-encoded Telethon session string. Generate with `/gensession` command. |
+| `SESSION_STRING` | Base64-encoded Telethon session string. Generate with `/gensession` command. ⚠️ The code reads `SESSION_STRING` — NOT `TELETHON_SESSION`. Make sure Railway has this exact variable name. |
 | `BOT_TOKEN` | Telegram bot token from @BotFather |
 | `ADMIN_ID` | Your Telegram user ID (only this user can control the bot) |
 | `SOURCE_CHANNEL` | Channel ID or username to copy FROM |
@@ -163,7 +163,9 @@ One query: `SELECT COUNT(*) FROM copied_files WHERE source_chat_id=? AND dest_ch
 
 ---
 
-## Known issues / sharp edges
+## Known issues
+
+- **`SESSION_STRING` not `TELETHON_SESSION`:** The bridge reads `os.environ.get("SESSION_STRING", "")`. The Railway variable MUST be named `SESSION_STRING` exactly. Using `TELETHON_SESSION` (a common mistake) means the bot starts without a session and never auto-connects. / sharp edges
 
 - **Session revocations:** Telegram detects mass download/upload and revokes the session. Owner must regenerate with `/gensession`. Enabling 2FA on the userbot account reduces frequency. Running at "Fast" speed instead of "Turbo" also helps.
 
