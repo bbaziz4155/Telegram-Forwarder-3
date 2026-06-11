@@ -292,6 +292,7 @@ async def copy_channel_files(
     dry_run_mode: bool = False,
     allowed_exts: set = None,
     caption_replacement: str = "",
+    caption_suffix: str = "",
     notify_every: int = 0,
     skip_text: bool = False,
     notifier: "ProgressNotifier | None" = None,
@@ -419,6 +420,7 @@ async def copy_channel_files(
             client, dest_entity, msgs,
             dry_run=dry_run_mode,
             caption_replacement=caption_replacement,
+            caption_suffix=caption_suffix,
             on_flood_wait=_on_flood,
         )
         if result == "ok":
@@ -531,6 +533,7 @@ async def copy_channel_files(
                     client, dest_entity, message,
                     dry_run=dry_run_mode,
                     caption_replacement=caption_replacement,
+                    caption_suffix=caption_suffix,
                     on_flood_wait=_on_flood,
                 )
                 if result == "ok":
