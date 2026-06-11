@@ -226,5 +226,12 @@ def is_ready(bot_data: dict) -> bool:
     return bot_data.get("userbot_ready", False)
 
 
+def is_starting_up(bot_data: dict) -> bool:
+    """True while the bridge is actively connecting/reconnecting.
+    Use this to show "wait a few seconds" instead of "not connected".
+    """
+    return bot_data.get("userbot_reason", "") in ("connecting", "reconnecting")
+
+
 def is_locked(bot_data: dict) -> bool:
     return bot_data.get("userbot_locked", False)
