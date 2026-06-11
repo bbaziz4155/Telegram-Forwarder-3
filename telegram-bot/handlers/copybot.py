@@ -960,6 +960,7 @@ async def resume_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             opts = {
                 "allowed_exts":        set(config.ALLOWED_EXTS),
                 "caption_replacement": config.CAPTION_REPLACE,
+                "caption_suffix":      "",
                 "notify_every":        config.NOTIFY_EVERY,
                 "skip_text":           bool(config.SKIP_TEXT),
                 "rate_delay":          _SPEED_CYCLE[0][1],   # Safe speed
@@ -1079,6 +1080,9 @@ async def resume_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # Merge user caption_suffix into opts before saving (in case job was
+    # started before /setcaption was configured, or opts came from an old save)
+    opts.setdefault("caption_suffix", context.user_data.get("caption_suffix", ""))
     # Write autoresume file so a crash/kill during this resumed job restarts it
     _ar.save_resume(chat_id, src, dst, opts)
 
