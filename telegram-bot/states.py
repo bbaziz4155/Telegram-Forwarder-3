@@ -30,3 +30,7 @@ PREVIEW_AWAIT_MSG = 17
 GENSESSION_PHONE = 18
 GENSESSION_OTP   = 19
 GENSESSION_2FA   = 20
+
+# Admin management states (used by handlers/admin_mgmt.py)
+ADMIN_MGMT     = 21
+ADMIN_AWAIT_ID = 22
