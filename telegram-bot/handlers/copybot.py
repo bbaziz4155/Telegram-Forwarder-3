@@ -940,7 +940,7 @@ async def resume_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Userbot must be connected
     if not bridge.is_ready(bot_data):
         locked = bridge.is_locked(bot_data)
-        await update.message.reply_text(_not_ready(locked, False), parse_mode="Markdown")
+        await update.message.reply_text(_not_ready(locked, bridge.is_starting_up(bot_data)), parse_mode="Markdown")
         return
 
     # ── Find what to resume ──────────────────────────────────────────────────
@@ -1190,7 +1190,7 @@ async def listchats_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not bridge.is_ready(context.bot_data):
         locked = bridge.is_locked(context.bot_data)
         await query.edit_message_text(
-            _not_ready(locked),
+            _not_ready(locked, bridge.is_starting_up(context.bot_data)),
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(
                 [[InlineKeyboardButton("⬅️ Back", callback_data="menu")]]
@@ -1247,7 +1247,7 @@ async def listchats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send the user a list of all their Telegram chats with IDs."""
     if not bridge.is_ready(context.bot_data):
         locked = bridge.is_locked(context.bot_data)
-        await update.message.reply_text(_not_ready(locked), parse_mode="Markdown")
+        await update.message.reply_text(_not_ready(locked, bridge.is_starting_up(context.bot_data)), parse_mode="Markdown")
         return
 
     loading = await update.message.reply_text("⏳ Loading your chats…")
@@ -1928,7 +1928,7 @@ async def synctest_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ── 1. Userbot must be ready ─────────────────────────────────────────────
     if not bridge.is_ready(bot_data):
         await update.message.reply_text(
-            _not_ready(bridge.is_locked(bot_data)), parse_mode="Markdown"
+            _not_ready(bridge.is_locked(bot_data), bridge.is_starting_up(bot_data)), parse_mode="Markdown"
         )
         return
 
@@ -2472,7 +2472,7 @@ async def cleancaptions_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     if not bridge.is_ready(bot_data):
         await update.message.reply_text(
-            _not_ready(bridge.is_locked(bot_data)), parse_mode="Markdown"
+            _not_ready(bridge.is_locked(bot_data), bridge.is_starting_up(bot_data)), parse_mode="Markdown"
         )
         return
 
