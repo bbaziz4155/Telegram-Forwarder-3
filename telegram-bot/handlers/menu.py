@@ -23,6 +23,7 @@ def main_menu_keyboard(userbot_ready: bool = False):
         [InlineKeyboardButton(connect_label,           callback_data="userbot_login"),
          InlineKeyboardButton("📊 Status",             callback_data="status_menu")],
         [InlineKeyboardButton("📡 List My Chats",      callback_data="listchats_menu")],
+        [InlineKeyboardButton("👥 Manage Admins",      callback_data="admin_mgmt")],
         [InlineKeyboardButton("ℹ️ Help",               callback_data="help")],
     ])
 
@@ -85,11 +86,12 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /setcaption — Append a custom line to every copied caption\n"
         "  `/setcaption 📌 @YourChannel` sets it · `/setcaption off` removes it\n"
         "• /cleancaptions — Scan destination channel and strip watermark lines\n"
-        "  (e.g. \"FILE ADDED BY GOUTHAM SER\") from all existing captions\n"
         "• /stopcleaning — Cancel a running /cleancaptions job\n\n"
+        "*Admin management:*\n"
+        "• 👥 *Manage Admins* — Add or remove users who can access this bot\n\n"
         "*Session management:*\n"
-        "• /gensession — Generate a fresh `SESSION_STRING` in-chat _(no external tools needed)_\n"
-        "• /deletesession — Permanently revoke the active session _(use if session is compromised)_\n\n"
+        "• /gensession — Generate a fresh `SESSION_STRING` in-chat\n"
+        "• /deletesession — Permanently revoke the active session\n\n"
         "*Important:* The bot must be an admin in destination chats.\n"
         "For /copy and /sync, you only need to be a *member* of the source channel."
     )
@@ -113,7 +115,6 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Fires when the user sends an unrecognised /command."""
     cmd = update.message.text.split()[0] if update.message.text else "that"
     await update.message.reply_text(
         f"❓ `{cmd}` is not a valid command.\n\n"
@@ -124,7 +125,6 @@ async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def unknown_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Fires when the user sends a plain text message outside any conversation."""
     text = (update.message.text or "").strip().lower()
 
     greetings = {"hi", "hello", "hey", "hii", "helo", "hiiii", "yo", "sup"}
