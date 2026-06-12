@@ -1,4 +1,3 @@
-12390ee86d413fc84f0114e766b85cf7559ffb4b
 """
 Bot handlers that drive the Telethon userbot from within the PTB Telegram bot:
 
