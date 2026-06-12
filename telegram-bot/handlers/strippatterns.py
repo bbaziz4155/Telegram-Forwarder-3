@@ -26,7 +26,6 @@ from userbot.filter_utils import (
     load_custom_patterns,
     save_custom_patterns,
     reload_strip_patterns,
-    _build_promo_re,
     clean_caption,
 )
 from states import STRIP_MGMT, STRIP_AWAIT_ADD, STRIP_AWAIT_TEST
@@ -39,6 +38,21 @@ _CB_TEST   = "sp_test"
 _CB_BACK   = "sp_back"
 _CB_RM_PFX = "sp_rm_"   # + str(index) within custom list
 
+# All MarkdownV2 special chars that must be escaped outside code spans
+_MV2_SPECIAL = r"\_*[]()~`>#+-=|{}.!"
+
+
+def _esc_mv2(text: str) -> str:
+    """Escape all MarkdownV2 special characters in plain text."""
+    for ch in _MV2_SPECIAL:
+        text = text.replace(ch, f"\\{ch}")
+    return text
+
+
+def _esc_code(text: str) -> str:
+    """Escape text for use inside a MarkdownV2 inline code span (backticks)."""
+    return text.replace("\\", "\\\\").replace("`", "\\`")
+
 
 def _builtin_patterns() -> list:
     return list(getattr(_cfg, "STRIP_PATTERNS", []))
@@ -49,24 +63,24 @@ def _make_menu_text() -> str:
     custom  = load_custom_patterns()
 
     lines = ["✂️ *Caption Strip Patterns*\n"]
-    lines.append("These patterns remove matching lines from captions during /copy and /cleancaptions\\.\n")
+    lines.append(_esc_mv2("These patterns remove matching lines from captions during /copy and /cleancaptions.") + "\n")
 
     if builtin:
         lines.append("*🔒 Built\\-in \\(read\\-only\\):*")
         for p in builtin:
-            lines.append(f"  • `{_esc(p)}`")
+            lines.append(f"  • `{_esc_code(p)}`")
         lines.append("")
 
     if custom:
         lines.append("*✏️ Custom \\(your additions\\):*")
         for i, p in enumerate(custom):
-            lines.append(f"  {i+1}\\. `{_esc(p)}`")
+            lines.append(f"  {i+1}\\. `{_esc_code(p)}`")
     else:
         lines.append("_No custom patterns yet\\._")
 
+    total = len(builtin) + len(custom)
     lines.append(
-        "\n*Total active:* " + str(len(builtin) + len(custom)) +
-        " pattern\\(s\\)\n\n"
+        f"\n*Total active:* {total} pattern\\(s\\)\n\n"
         "Use the buttons below to add a pattern, remove a custom one, or test "
         "whether a caption line would be stripped\\."
     )
@@ -77,7 +91,6 @@ def _make_menu_markup() -> InlineKeyboardMarkup:
     custom = load_custom_patterns()
     rows   = []
 
-    # Remove buttons — one per custom pattern (up to 10 shown)
     for i, p in enumerate(custom[:10]):
         label = p[:28] + "…" if len(p) > 28 else p
         rows.append([InlineKeyboardButton(
@@ -90,12 +103,6 @@ def _make_menu_markup() -> InlineKeyboardMarkup:
     ])
     rows.append([InlineKeyboardButton("🔙 Back to Menu", callback_data=_CB_BACK)])
     return InlineKeyboardMarkup(rows)
-
-
-def _esc(text: str) -> str:
-    """Escape special MarkdownV2 characters for inline code blocks."""
-    # Inside backtick spans we only need to escape backticks and backslashes
-    return text.replace("\\", "\\\\").replace("`", "\\`")
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -136,7 +143,7 @@ async def sp_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if 0 <= idx < len(custom):
             removed = custom.pop(idx)
             save_custom_patterns(custom)
-            total = reload_strip_patterns()
+            reload_strip_patterns()
             await query.answer(f"Removed: {removed[:40]}", show_alert=False)
             logger.info("Removed strip pattern #%d: %r", idx, removed)
         return await _refresh_menu(query, context)
@@ -166,15 +173,16 @@ async def sp_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
         return STRIP_AWAIT_TEST
 
-    # ── Back to main menu ────────────────────────────────────────────────────
+    # ── Back to main menu ─────────────────────────────────────────────────────
+    # FIX: callback query updates have no update.message — edit inline and end conv.
     if data == _CB_BACK:
         try:
-            await query.edit_message_text("↩️ Returning to menu…")
+            await query.edit_message_text(
+                "↩️ Returned to menu\\. Send /start to open the main menu\\.",
+                parse_mode="MarkdownV2",
+            )
         except Exception:
             pass
-        from handlers.menu import start as menu_start
-        # Synthesise a fake message-based update so menu_start works
-        await menu_start(update, context)
         return ConversationHandler.END
 
     return STRIP_MGMT
@@ -213,15 +221,11 @@ async def sp_got_pattern(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     total = reload_strip_patterns()
     logger.info("Added strip pattern: %r (total=%d)", raw, total)
 
-    msg = await update.message.reply_text(
-        f"✅ *Pattern added!*\n\n`{raw}`\n\n"
-        f"Total active patterns: {total}",
+    # Show fresh menu with confirmation
+    await update.message.reply_text(
+        f"✅ *Pattern added!*\n\n`{raw}`\n\nTotal active patterns: {total}",
         parse_mode="Markdown",
-        reply_markup=_make_menu_markup(),
     )
-    context.user_data["sp_msg_id"] = msg.message_id
-
-    # Send a fresh menu message so the user can keep managing
     menu_msg = await update.message.reply_text(
         _make_menu_text(),
         parse_mode="MarkdownV2",
@@ -241,16 +245,20 @@ async def sp_got_test(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
     cleaned = clean_caption(raw, replacement="")
 
+    # FIX: fully escape user input for MarkdownV2 code blocks
+    raw_esc     = _esc_code(raw)
+    cleaned_esc = _esc_code(cleaned) if cleaned else "(empty — all lines stripped)"
+
     if cleaned == raw.strip():
         result_text = (
             "🟡 *No patterns matched* — caption would be unchanged\\.\n\n"
-            f"*Input:*\n```\n{_md2esc(raw)}\n```"
+            f"*Input:*\n```\n{raw_esc}\n```"
         )
     else:
         result_text = (
-            "✅ *Patterns matched\\!* Here's the result:\n\n"
-            f"*Before:*\n```\n{_md2esc(raw)}\n```\n\n"
-            f"*After:*\n```\n{_md2esc(cleaned) if cleaned else '(empty)'}\n```"
+            "✅ *Patterns matched\\!* Here's what the caption looks like after stripping:\n\n"
+            f"*Before:*\n```\n{raw_esc}\n```\n\n"
+            f"*After:*\n```\n{cleaned_esc}\n```"
         )
 
     back_markup = InlineKeyboardMarkup([[
@@ -264,12 +272,7 @@ async def sp_got_test(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     return STRIP_MGMT
 
 
-def _md2esc(text: str) -> str:
-    """Escape text for MarkdownV2 code blocks (backtick-safe)."""
-    return text.replace("\\", "\\\\").replace("`", "\\`")
-
-
-# ── Return-to-menu callback (from test result) ────────────────────────────────
+# ── Return-to-menu callback (from test result back button) ────────────────────
 
 async def sp_return_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
