@@ -1,3 +1,4 @@
+12390ee86d413fc84f0114e766b85cf7559ffb4b
 """
 Bot handlers that drive the Telethon userbot from within the PTB Telegram bot:
 
@@ -40,7 +41,7 @@ logger = logging.getLogger(__name__)
 _FILTER_CYCLE = ["ALL", "mkv", "mp4", "mkv,mp4", "mkv,mp4,avi"]
 _NOTIFY_CYCLE = [100, 200, 500, 0]
 # (label, delay_seconds) — Safe is the default; avoids Telegram flood waits for large media
-_SPEED_CYCLE  = [("🛡 Safe (2s)", 2.0), ("🐢 Normal (0.35s)", 0.35), ("🚀 Fast (0.05s)", 0.05), ("⚡ Turbo (max)", 0.0)]
+_SPEED_CYCLE  = [("🛡 Safe (2s)", 2.0), ("⏱ Steady (1s)", 1.0), ("🐢 Normal (0.35s)", 0.35), ("🚀 Fast (0.05s)", 0.05), ("⚡ Turbo (max)", 0.0)]
 _SPEED_CB    = "speed_set:"
 MIN_EDIT_INTERVAL = 5.0
 
