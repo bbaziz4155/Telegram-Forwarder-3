@@ -28,6 +28,7 @@ from handlers import preview as preview_handler
 from handlers import gensession as gensession_handler
 from handlers import deletesession as deletesession_handler
 from handlers import admin_mgmt as admin_mgmt_handler
+from handlers import strippatterns as strippatterns_handler
 from states import (
     MAIN_MENU,
     ADD_RULE_SOURCE,
@@ -120,6 +121,9 @@ def build_app(token: str) -> Application:
     # ── Admin management conversation ─────────────────────────────────────────
     admin_conv = admin_mgmt_handler.build_admin_conv()
 
+    # ── Strip-pattern management conversation ─────────────────────────────────
+    strippatterns_conv = strippatterns_handler.build_strippatterns_conv()
+
     # ── Main menu conversation handler ───────────────────────────────────────
     conv = ConversationHandler(
         entry_points=[
@@ -183,9 +187,9 @@ def build_app(token: str) -> Application:
         per_message=False,
     )
 
-    copy_conv      = copybot_handler.build_copy_conv()
-    login_conv     = login_handler.build_login_conv()
-    preview_conv   = preview_handler.build_preview_conv()
+    copy_conv       = copybot_handler.build_copy_conv()
+    login_conv      = login_handler.build_login_conv()
+    preview_conv    = preview_handler.build_preview_conv()
     gensession_conv = gensession_handler.build_gensession_conv()
 
     app.add_handler(preview_conv)
@@ -193,6 +197,7 @@ def build_app(token: str) -> Application:
     app.add_handler(login_conv)
     app.add_handler(gensession_conv)
     app.add_handler(admin_conv)
+    app.add_handler(strippatterns_conv)
     app.add_handler(conv)
     app.add_handler(CommandHandler("help", menu_handler.help_cmd))
 
