@@ -3,6 +3,7 @@ Caption cleaning and file-type filtering utilities.
 
   clean_caption(text, replacement)        — swap every @username AND t.me link with replacement
   matches_filter(message, exts, skip_text) — True if message passes the filter
+  reload_strip_patterns()                 — rebuild _PROMO_RE after patterns change at runtime
 
 What "deleted text from channel" means in Telethon
 ---------------------------------------------------
@@ -23,6 +24,7 @@ We let through by default (skip_text=False):
 
 skip_text=True is an extra opt-in that also blocks those text-only posts.
 """
+import json
 import os
 import re
 
@@ -51,6 +53,11 @@ _WATERMARK_RE = re.compile(
     re.UNICODE,
 )
 
+# Path to user-managed patterns file (created by /strippatterns command)
+_CUSTOM_PATTERNS_FILE = os.path.join(
+    os.path.dirname(__file__), "..", "data", "strip_patterns.json"
+)
+
 
 def _build_promo_re(patterns: list) -> "re.Pattern | None":
     """
@@ -69,23 +76,68 @@ def _build_promo_re(patterns: list) -> "re.Pattern | None":
     return re.compile(combined, re.MULTILINE | re.IGNORECASE | re.UNICODE)
 
 
-def _load_promo_re() -> "re.Pattern | None":
+def _all_patterns() -> list:
     """
-    Build _PROMO_RE from config.STRIP_PATTERNS at import time.
-    Falls back to no filtering if config is unavailable or has no STRIP_PATTERNS.
+    Return the merged list of built-in (config.py) + custom (JSON file) patterns.
     """
     try:
         import config as _cfg
-        patterns = getattr(_cfg, "STRIP_PATTERNS", [])
+        builtin = list(getattr(_cfg, "STRIP_PATTERNS", []))
     except ImportError:
-        patterns = []
-    return _build_promo_re(patterns)
+        builtin = []
+
+    try:
+        with open(_CUSTOM_PATTERNS_FILE) as f:
+            custom = json.load(f)
+        if not isinstance(custom, list):
+            custom = []
+    except FileNotFoundError:
+        custom = []
+    except Exception:
+        custom = []
+
+    return builtin + custom
 
 
-# Compiled once at import time from config.STRIP_PATTERNS.
-# Matches any caption line that is pure channel promotion / watermark text
-# (e.g. "Latest Movies - Master Print Downloader📂(MPD)5.0").
+def _load_promo_re() -> "re.Pattern | None":
+    """Build _PROMO_RE from all patterns at import time."""
+    return _build_promo_re(_all_patterns())
+
+
+# Compiled once at import time; call reload_strip_patterns() after any change.
 _PROMO_RE: "re.Pattern | None" = _load_promo_re()
+
+
+def reload_strip_patterns() -> int:
+    """
+    Rebuild _PROMO_RE from the current config + custom JSON file.
+    Call this after adding or removing custom patterns via /strippatterns.
+    Returns the total number of active patterns.
+    """
+    global _PROMO_RE
+    patterns = _all_patterns()
+    _PROMO_RE = _build_promo_re(patterns)
+    return len(patterns)
+
+
+def load_custom_patterns() -> list:
+    """Return the list of user-added patterns from the JSON file."""
+    try:
+        with open(_CUSTOM_PATTERNS_FILE) as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except FileNotFoundError:
+        return []
+    except Exception:
+        return []
+
+
+def save_custom_patterns(patterns: list) -> None:
+    """Persist the custom patterns list to disk."""
+    os.makedirs(os.path.dirname(_CUSTOM_PATTERNS_FILE), exist_ok=True)
+    with open(_CUSTOM_PATTERNS_FILE, "w") as f:
+        json.dump(patterns, f, indent=2)
+
 
 # Map of common extension → extra mime substrings to check
 _MIME_HINTS: dict[str, list[str]] = {
@@ -106,11 +158,10 @@ def clean_caption(text: str, replacement: str) -> str:
     Clean a caption before re-sending — four steps, always in this order:
 
       1. Strip bot-watermark lines (Kuttu bot™ Files, ✨ ZiZuBot™ …) — always.
-      2. Strip promo/ad lines from config.STRIP_PATTERNS — always.
+      2. Strip promo/ad lines from config.STRIP_PATTERNS + custom JSON — always.
          Entire lines are removed, e.g.:
            "Latest Movies - Master Print Downloader📂(MPD)5.0"
-           "Movie Request Group - MPD Requested Movies Zone 3.0📂"
-           "🔗 CHANNEL LINK 👉 https://t.me/..."
+           "FILE ADDED BY GOUTHAM SER ❤️"
       3. Replace every https://t.me/... and t.me/... link with *replacement*.
       4. Replace every remaining @username with *replacement*.
          Pass replacement="" or None to keep original links/usernames unchanged.
@@ -151,19 +202,15 @@ def _is_deleted_or_empty(message) -> bool:
       2. Deleted-media placeholders — message.media is MessageMediaEmpty
       3. Completely empty — no text AND no usable media at all
     """
-    # 1. Service / action messages
     if getattr(message, "action", None) is not None:
         return True
 
     media = getattr(message, "media", None)
 
-    # 2. Deleted-media placeholder (MessageMediaEmpty)
     if media is not None:
-        # Use the class name string to avoid a hard import at module level
         if type(media).__name__ == "MessageMediaEmpty":
             return True
 
-    # 3. Completely empty — no text, no (real) media
     has_text  = bool(getattr(message, "message", None))
     has_media = bool(media)
     if not has_text and not has_media:
@@ -196,34 +243,28 @@ def matches_filter(
       If set, media must match by filename extension or mime type.
       Text-only messages that passed the skip_text check are always let through.
     """
-    # Step 1 — always block deleted / empty / service messages
     if _is_deleted_or_empty(message):
         return False
 
     has_media = bool(getattr(message, "media", None))
 
-    # Step 2 — optional blanket text filter
     if skip_text and not has_media:
         return False
 
-    # Step 3 — no extension filter: pass everything remaining
     if not allowed_exts:
         return True
 
-    # Step 4 — extension filter applies only to media messages
     if not has_media:
-        return True  # text message reached here → skip_text=False, let it through
+        return True
 
     file_obj = getattr(message, "file", None)
 
-    # Check filename extension
     fname = getattr(file_obj, "name", None) or ""
     if fname:
         ext = os.path.splitext(fname)[1].lower().lstrip(".")
         if ext in allowed_exts:
             return True
 
-    # Fallback: check mime type
     mime = (getattr(file_obj, "mime_type", None) or "").lower()
     for ext in allowed_exts:
         hints = _MIME_HINTS.get(ext, [ext])
