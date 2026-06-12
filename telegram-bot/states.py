@@ -34,3 +34,8 @@ GENSESSION_2FA   = 20
 # Admin management states (used by handlers/admin_mgmt.py)
 ADMIN_MGMT     = 21
 ADMIN_AWAIT_ID = 22
+
+# Strip-pattern management states (used by handlers/strippatterns.py)
+STRIP_MGMT      = 23
+STRIP_AWAIT_ADD  = 24
+STRIP_AWAIT_TEST = 25
