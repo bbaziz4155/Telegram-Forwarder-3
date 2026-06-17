@@ -71,6 +71,14 @@ telegram-bot/           ← working directory (on sys.path at runtime)
 
 6. **`caption_suffix` missing from resume opts** — when a job was resumed after a crash, the `caption_suffix` key was missing from the opts dict, causing a `KeyError`. Fixed by adding `"caption_suffix": ""` as default and `opts.setdefault(...)` in the resume callback.
 
+7. **`caption_suffix` not saved in `autoresume.py`** — `save_resume()` persisted all other opts to `autoresume.json` but omitted `caption_suffix`. Result: `/setcaption` suffix was silently dropped whenever the bot auto-resumed after a process kill. Fixed by adding `"caption_suffix": opts.get("caption_suffix", "")` to the saved opts dict.
+
+8. **`synctest_cmd` tested the wrong channels** — `/synctest` always probed `config.SOURCE_CHANNEL` / `config.DEST_CHANNEL` (hard-coded), even when the running `/sync` was started with different channels via the wizard. `_launch_job` now stores `active_sync_src` / `active_sync_dst` in `bot_data`, and `synctest_cmd` reads those with a fallback to config values.
+
+9. **Stale `active_sync_src`/`active_sync_dst` after sync stops** — the two new bot_data keys were not cleaned up in `_run_sync`'s cancel and error handlers, leaving stale channel IDs that could mislead a subsequent `/synctest` call. Both handlers now pop the keys alongside the other sync keys.
+
+10. **`/resume` config-defaults path ignored `/setcaption` suffix** — when `/resume` fell through to the config-defaults branch (no `autoresume.json` on disk, checkpoint file present), the `caption_suffix` the user had set via `/setcaption` was never applied. Fixed by adding `"caption_suffix": context.user_data.get("caption_suffix", "")` alongside the other config overrides.
+
 ### New features (all pushed to GitHub)
 
 1. **Persistent dedup** (`database.py` + `forwarder.py`)
