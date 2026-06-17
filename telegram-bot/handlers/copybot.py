@@ -500,6 +500,8 @@ async def _launch_job(query, context: ContextTypes.DEFAULT_TYPE, opts: dict, src
         )
         context.bot_data["active_sync_task"] = task
         context.bot_data["active_sync_opts"] = opts   # read by /synctest
+        context.bot_data["active_sync_src"]  = src    # read by /synctest
+        context.bot_data["active_sync_dst"]  = dst    # read by /synctest
 
 
 # ── Background coroutines ─────────────────────────────────────────────────────
@@ -720,6 +722,8 @@ async def _run_sync(client, src, dst, opts, bot, chat_id, bot_data):
                 pass
         bot_data.pop("active_sync_handler", None)
         bot_data.pop("active_sync_opts",    None)   # bug-fix: clear on cancel
+        bot_data.pop("active_sync_src",     None)
+        bot_data.pop("active_sync_dst",     None)
         stats = bot_data.pop("active_sync_stats", {})
         c = stats.get("copied",  0)
         f = stats.get("failed",  0)
@@ -753,6 +757,8 @@ async def _run_sync(client, src, dst, opts, bot, chat_id, bot_data):
         bot_data.pop("active_sync_handler", None)
         bot_data.pop("active_sync_stats",   None)
         bot_data.pop("active_sync_opts",    None)   # bug-fix: clear on error
+        bot_data.pop("active_sync_src",     None)
+        bot_data.pop("active_sync_dst",     None)
         try:
             await bot.send_message(chat_id, f"❌ Sync error: {e}")
         except Exception:
@@ -962,6 +968,7 @@ async def resume_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             opts.update({
                 "allowed_exts":        set(config.ALLOWED_EXTS),
                 "caption_replacement": config.CAPTION_REPLACE,
+                "caption_suffix":      context.user_data.get("caption_suffix", ""),
                 "notify_every":        config.NOTIFY_EVERY,
                 "skip_text":           bool(config.SKIP_TEXT),
             })
@@ -1965,8 +1972,8 @@ async def synctest_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     client = bridge.get_client(bot_data)
-    src    = config.SOURCE_CHANNEL
-    dst    = config.DEST_CHANNEL
+    src    = bot_data.get("active_sync_src") or config.SOURCE_CHANNEL
+    dst    = bot_data.get("active_sync_dst") or config.DEST_CHANNEL
 
     status = await update.message.reply_text(
         "🔬 *Sync Health Check*\n\n⏳ Preparing…",
