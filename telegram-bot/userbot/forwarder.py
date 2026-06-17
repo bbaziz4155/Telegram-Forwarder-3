@@ -349,6 +349,27 @@ async def copy_channel_files(
     state["copied_ids"].update(db_msg_ids)  # merge with checkpoint gap-IDs
     _pending_db: list = []  # (msg_id, doc_id) batch for DB flush
 
+    # ── destination pre-scan ──────────────────────────────────────────────────
+    # Scan what files are ALREADY in the destination so we never re-send them
+    # even when the SQLite dedup DB has been wiped (e.g. every Railway redeploy
+    # creates a fresh container).  Uses (filename, filesize) as the dedup key —
+    # robust enough for video files where the name is unique per title.
+    dest_file_keys: set = set()
+    _info("🔍  Pre-scanning destination for files already there (prevents duplicates)…")
+    try:
+        _dscan = 0
+        async for _dm in client.iter_messages(dest_entity, reverse=False):
+            _df = getattr(_dm, "file", None)
+            if _df and getattr(_df, "name", None) and getattr(_df, "size", None):
+                dest_file_keys.add((_df.name, _df.size))
+            _dscan += 1
+            if _dscan % 5000 == 0:
+                _info(f"   … scanned {_dscan:,} destination messages ({len(dest_file_keys):,} unique files)")
+        _info(f"📦  Destination scan done: {_dscan:,} messages, {len(dest_file_keys):,} unique files already there.")
+    except Exception as _de:
+        logger.warning("Destination pre-scan aborted (%s) — continuing without it", _de)
+        dest_file_keys = set()
+
     if resume_from > 0 and not force_restart:
         _ok(f"♻️   Resuming from msg ID {resume_from} "
             f"(already copied: {state['copied']:,})")
@@ -409,6 +430,16 @@ async def copy_channel_files(
             return n
         # Skip the whole album if every message was already copied
         all_already_done = all(m.id in state["copied_ids"] for m in msgs)
+        # Also skip if every media file in the album is already in the destination
+        # by filename+size (catches re-deploys where SQLite was wiped).
+        if not all_already_done and dest_file_keys:
+            _album_media = [m for m in msgs
+                            if getattr(getattr(m, "file", None), "name", None)
+                            and getattr(getattr(m, "file", None), "size", None)]
+            if _album_media and all(
+                (m.file.name, m.file.size) in dest_file_keys for m in _album_media
+            ):
+                all_already_done = True
         if all_already_done:
             skipped += n
             return n
@@ -433,6 +464,11 @@ async def copy_channel_files(
                 if _doc:
                     db_doc_ids.add(_doc)
                 _pending_db.append((m.id, _doc))
+                # Track in dest_file_keys so same file isn't sent again this run
+                _fn = getattr(getattr(m, "file", None), "name", None)
+                _fs = getattr(getattr(m, "file", None), "size", None)
+                if _fn and _fs:
+                    dest_file_keys.add((_fn, _fs))
             await notifier.tick(copied, skipped, failed, total, source_name, dest_name)
         elif result == "fail":
             failed += n
@@ -508,11 +544,18 @@ async def copy_channel_files(
                     _update_pbar(pbar, copied, skipped, failed, flood_waits)
 
                 # Duplicate check — skip if already copied in a previous run.
-                # Two layers: message ID (same msg) OR document ID (same file
-                # re-uploaded at a different message ID in the source channel).
+                # Three layers:
+                #   1. message ID — same source message already processed
+                #   2. document ID — same file re-uploaded at a different msg ID
+                #   3. filename+size — already present in destination (survives
+                #      Railway redeploys that wipe the SQLite DB)
                 _msg_doc_id = getattr(getattr(message, "file", None), "id", None)
+                _msg_fname  = getattr(getattr(message, "file", None), "name", None)
+                _msg_fsize  = getattr(getattr(message, "file", None), "size", None)
+                _msg_fkey   = (_msg_fname, _msg_fsize) if _msg_fname and _msg_fsize else None
                 if (message.id in state["copied_ids"]
-                        or (_msg_doc_id and _msg_doc_id in db_doc_ids)):
+                        or (_msg_doc_id and _msg_doc_id in db_doc_ids)
+                        or (_msg_fkey and _msg_fkey in dest_file_keys)):
                     skipped += 1
                     pbar.update(1)
                     _update_pbar(pbar, copied, skipped, failed, flood_waits)
@@ -542,6 +585,8 @@ async def copy_channel_files(
                     state["copied_ids"].add(message.id)
                     if _msg_doc_id:
                         db_doc_ids.add(_msg_doc_id)
+                    if _msg_fkey:
+                        dest_file_keys.add(_msg_fkey)  # prevent re-send same file this run
                     _pending_db.append((message.id, _msg_doc_id))
                 elif result == "skip":
                     skipped += 1
