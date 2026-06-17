@@ -132,7 +132,14 @@ async def _connect_loop(bot_data: dict) -> None:
             bot_data["userbot_reason"] = "connecting"
             bot_data.pop("userbot_locked", None)
 
-            client.flood_sleep_threshold = 0
+            # Auto-sleep flood waits up to 60 s so short waits (3-60 s) are
+            # absorbed silently without crashing the copy loop.  Waits > 60 s
+            # are raised as FloodWaitError and handled explicitly by the copy
+            # engine (with progress notification and checkpoint save).
+            # Setting this to 0 was a bug: it caused every flood wait —
+            # including the routine 3-second GetHistoryRequest wait — to raise
+            # an exception that killed the copy job.
+            client.flood_sleep_threshold = 60
 
             await client.connect()
 
