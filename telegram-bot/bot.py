@@ -29,6 +29,7 @@ from handlers import gensession as gensession_handler
 from handlers import deletesession as deletesession_handler
 from handlers import admin_mgmt as admin_mgmt_handler
 from handlers import strippatterns as strippatterns_handler
+from handlers import purgedups as purgedups_handler
 from states import (
     MAIN_MENU,
     ADD_RULE_SOURCE,
@@ -205,6 +206,9 @@ def build_app(token: str) -> Application:
         app.add_handler(h)
 
     for h in deletesession_handler.get_deletesession_handlers():
+        app.add_handler(h)
+
+    for h in purgedups_handler.get_purgedups_handlers():
         app.add_handler(h)
 
     app.add_handler(MessageHandler(filters.COMMAND, menu_handler.unknown_command))
