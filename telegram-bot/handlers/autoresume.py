@@ -30,6 +30,7 @@ def save_resume(chat_id: int, src, dst, opts: dict) -> None:
             # sets are not JSON-serializable — store as sorted list
             "allowed_exts":        sorted(opts.get("allowed_exts") or []),
             "caption_replacement": opts.get("caption_replacement", ""),
+            "caption_suffix":      opts.get("caption_suffix", ""),
             "notify_every":        opts.get("notify_every", 0),
             "skip_text":           bool(opts.get("skip_text", False)),
             "rate_delay":          float(opts.get("rate_delay", 0.0)),
