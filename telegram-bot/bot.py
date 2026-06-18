@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import os
-from telegram import Update
+from telegram import BotCommand, Update
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -97,6 +97,46 @@ async def post_init(application: Application):
 
     # Schedule auto-resume check
     asyncio.create_task(copybot_handler.schedule_auto_resume(application))
+
+    # ── Register all commands in the Telegram "/" menu ────────────────────────
+    await application.bot.set_my_commands([
+        # ── Core ──────────────────────────────────────────────────────────────
+        BotCommand("start",          "🚀 Check if bot is alive"),
+        BotCommand("menu",           "🏠 Open the main menu"),
+        BotCommand("help",           "❓ Help and feature list"),
+        # ── Session / auth ────────────────────────────────────────────────────
+        BotCommand("login",          "🔑 Connect your Telegram account"),
+        BotCommand("gensession",     "🔐 Generate a fresh SESSION_STRING in-chat"),
+        BotCommand("deletesession",  "🗑 Permanently revoke the active session"),
+        # ── Copy job ──────────────────────────────────────────────────────────
+        BotCommand("copy",           "📦 Bulk copy files (no forward tag)"),
+        BotCommand("dryrun",         "🔍 Preview copy without sending"),
+        BotCommand("resume",         "▶️ Resume an interrupted copy job"),
+        BotCommand("status",         "📊 Check copy job progress"),
+        BotCommand("stopjob",        "⛔ Cancel the running copy job"),
+        # ── Sync ──────────────────────────────────────────────────────────────
+        BotCommand("sync",           "🔄 Start live auto-sync (new messages)"),
+        BotCommand("stopsync",       "🔴 Stop the auto-sync"),
+        BotCommand("synctest",       "🧪 Test sync connection"),
+        # ── Captions ──────────────────────────────────────────────────────────
+        BotCommand("setcaption",     "✏️ Set/remove caption suffix on copied files"),
+        BotCommand("previewcaption", "👁 Preview how a caption will look after strip"),
+        BotCommand("strippatterns",  "🧹 Manage caption strip/clean patterns"),
+        BotCommand("striptest",      "🧪 Test a strip pattern on sample text"),
+        BotCommand("cleancaptions",  "🧽 Clean captions in destination channel"),
+        BotCommand("stopcleaning",   "⛔ Cancel a running cleancaptions job"),
+        # ── Dedup / maintenance ───────────────────────────────────────────────
+        BotCommand("purgedups",      "🗑 Delete duplicate files in destination"),
+        # ── Info / stats ──────────────────────────────────────────────────────
+        BotCommand("listchats",      "📋 List your Telegram chats"),
+        BotCommand("stats",          "📈 Show dedup statistics"),
+        BotCommand("history",        "🕒 Copy job history"),
+        BotCommand("clearhistory",   "🗑 Clear copy job history"),
+        BotCommand("config",         "⚙️ Show current bot configuration"),
+        BotCommand("speed",          "⚡ Set copy speed (safe / fast / turbo)"),
+        # ── Admin ─────────────────────────────────────────────────────────────
+        BotCommand("cancel",         "✖️ Cancel current wizard/operation"),
+    ])
 
 
 def build_app(token: str) -> Application:
