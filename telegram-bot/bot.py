@@ -100,7 +100,12 @@ async def post_init(application: Application):
 
 
 def build_app(token: str) -> Application:
-    _data_dir = os.path.join(os.path.dirname(__file__), "data")
+    # Honour DATA_DIR env var so a Railway Volume (or any persistent mount)
+    # can be used for all bot state without changing code.
+    # Railway: set DATA_DIR=/data in Variables, then add a Volume at /data.
+    _data_dir = os.environ.get(
+        "DATA_DIR", os.path.join(os.path.dirname(__file__), "data")
+    )
     os.makedirs(_data_dir, exist_ok=True)
     persistence = PicklePersistence(
         filepath=os.path.join(_data_dir, "persistence.pkl"),
