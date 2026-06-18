@@ -5,7 +5,8 @@ then fall back to the hardcoded defaults below.
 Set these in your Railway environment variables to override without
 touching this file:
   ADMIN_ID, SOURCE_CHANNEL, DEST_CHANNEL, CAPTION_REPLACE,
-  CAPTION_SUFFIX, NOTIFY_EVERY, ALLOWED_EXTS, SKIP_TEXT
+  CAPTION_SUFFIX, NOTIFY_EVERY, ALLOWED_EXTS, SKIP_TEXT,
+  RAILWAY_TOKEN, CREDIT_ALERT_THRESHOLD, CREDIT_CHECK_HOURS
 
 How to find a channel ID:
   Forward any message from the channel to @userinfobot — it shows the ID.
@@ -59,6 +60,15 @@ ALLOWED_EXTS: set = {e.strip().lower() for e in _ext_env.split(",") if e.strip()
 
 # ── Skip plain text-only messages (season labels / hashtags are kept) ─────────
 SKIP_TEXT = _bool_env("SKIP_TEXT", False)
+
+# ── Railway credit monitor ────────────────────────────────────────────────────
+# Set RAILWAY_TOKEN to a Railway API token (railway.com → Settings → Tokens)
+# to enable automatic low-credit alerts sent to the bot owner.
+# Alert fires when balance < CREDIT_ALERT_THRESHOLD (default $1.00).
+# Check interval defaults to every 12 hours.
+RAILWAY_TOKEN            = os.environ.get("RAILWAY_TOKEN", "")
+CREDIT_ALERT_THRESHOLD   = float(os.environ.get("CREDIT_ALERT_THRESHOLD", "1.0"))
+CREDIT_CHECK_HOURS       = _int_env("CREDIT_CHECK_HOURS", 12)
 
 # ── Promo / watermark strip patterns ─────────────────────────────────────────
 STRIP_PATTERNS: list = [
