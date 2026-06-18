@@ -1,7 +1,13 @@
 import aiosqlite
 import os
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "data", "forwarder.db")
+# DATA_DIR env var lets you point all persistent data at a Railway Volume
+# (or any other mounted path) without changing code.
+# Example: set DATA_DIR=/data in Railway Variables, then add a Volume at /data.
+# Falls back to the local telegram-bot/data/ directory when unset.
+_DEFAULT_DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+DATA_DIR = os.environ.get("DATA_DIR", _DEFAULT_DATA_DIR)
+DB_PATH = os.path.join(DATA_DIR, "forwarder.db")
 
 async def init_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
