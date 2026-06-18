@@ -30,6 +30,7 @@ from handlers import deletesession as deletesession_handler
 from handlers import admin_mgmt as admin_mgmt_handler
 from handlers import strippatterns as strippatterns_handler
 from handlers import purgedups as purgedups_handler
+import railway_monitor
 from states import (
     MAIN_MENU,
     ADD_RULE_SOURCE,
@@ -98,6 +99,9 @@ async def post_init(application: Application):
     # Schedule auto-resume check
     asyncio.create_task(copybot_handler.schedule_auto_resume(application))
 
+    # Start Railway credit monitor (no-op if RAILWAY_TOKEN not set)
+    asyncio.create_task(railway_monitor.start_credit_monitor(application))
+
     # ── Register all commands in the Telegram "/" menu ────────────────────────
     await application.bot.set_my_commands([
         # ── Core ──────────────────────────────────────────────────────────────
@@ -136,6 +140,8 @@ async def post_init(application: Application):
         BotCommand("speed",          "⚡ Set copy speed (safe / fast / turbo)"),
         # ── Admin ─────────────────────────────────────────────────────────────
         BotCommand("cancel",         "✖️ Cancel current wizard/operation"),
+        # ── Railway ───────────────────────────────────────────────────────────
+        BotCommand("creditcheck",    "💰 Check Railway credit balance"),
     ])
 
 
@@ -255,6 +261,8 @@ def build_app(token: str) -> Application:
 
     for h in purgedups_handler.get_purgedups_handlers():
         app.add_handler(h)
+
+    app.add_handler(CommandHandler("creditcheck", railway_monitor.creditcheck_cmd))
 
     app.add_handler(MessageHandler(filters.COMMAND, menu_handler.unknown_command))
     app.add_handler(
