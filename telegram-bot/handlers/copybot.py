@@ -222,7 +222,7 @@ def _default_opts(mode: str) -> dict:
         "filter_label":        "ALL",
         "allowed_exts":        set(config.ALLOWED_EXTS),
         "caption_replacement": config.CAPTION_REPLACE,
-        "caption_suffix":      "",
+        "caption_suffix":      config.CAPTION_SUFFIX,
         "notify_every":        config.NOTIFY_EVERY if mode != "sync" else 0,
         "speed_idx":           0,                      # index into _SPEED_CYCLE
         "rate_delay":          _SPEED_CYCLE[0][1],     # seconds between sends
@@ -486,7 +486,7 @@ async def _launch_job(query, context: ContextTypes.DEFAULT_TYPE, opts: dict, src
         )
         # Persist job to disk BEFORE creating the task so a crash mid-start still saves state
         # Inject user-configured caption suffix (set via /setcaption)
-        opts["caption_suffix"] = context.user_data.get("caption_suffix", "")
+        opts["caption_suffix"] = context.user_data.get("caption_suffix", config.CAPTION_SUFFIX)
         _ar.save_resume(chat_id, src, dst, opts)
         task = asyncio.create_task(
             _run_copy(client, src, dst, opts, notifier, bot, chat_id, context.bot_data)
@@ -968,7 +968,7 @@ async def resume_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             opts.update({
                 "allowed_exts":        set(config.ALLOWED_EXTS),
                 "caption_replacement": config.CAPTION_REPLACE,
-                "caption_suffix":      context.user_data.get("caption_suffix", ""),
+                "caption_suffix":      context.user_data.get("caption_suffix", config.CAPTION_SUFFIX),
                 "notify_every":        config.NOTIFY_EVERY,
                 "skip_text":           bool(config.SKIP_TEXT),
             })
@@ -1092,7 +1092,7 @@ async def resume_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Merge user caption_suffix into opts before saving (in case job was
     # started before /setcaption was configured, or opts came from an old save)
-    opts.setdefault("caption_suffix", context.user_data.get("caption_suffix", ""))
+    opts.setdefault("caption_suffix", context.user_data.get("caption_suffix", config.CAPTION_SUFFIX))
     # Write autoresume file so a crash/kill during this resumed job restarts it
     _ar.save_resume(chat_id, src, dst, opts)
 
@@ -2298,7 +2298,7 @@ async def setcaption_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     text = " ".join(args).strip()
 
     if not text:
-        current = context.user_data.get("caption_suffix", "")
+        current = context.user_data.get("caption_suffix", config.CAPTION_SUFFIX)
         if current:
             await update.message.reply_text(
                 f"📝 *Current caption suffix:*\n`{current}`\n\n"
