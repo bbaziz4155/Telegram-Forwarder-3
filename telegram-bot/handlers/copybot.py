@@ -1412,6 +1412,16 @@ async def config_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     repl      = config.CAPTION_REPLACE
     repl_disp = _code(repl) if repl else "_keep original_"
 
+    # ── Caption suffix ────────────────────────────────────────────────────────
+    suffix_env     = config.CAPTION_SUFFIX
+    suffix_session = context.user_data.get("caption_suffix", suffix_env)
+    if suffix_session:
+        suffix_disp = _code(suffix_session)
+        if suffix_session != suffix_env:
+            suffix_disp += " _(session override — /setcaption off to reset)_"
+    else:
+        suffix_disp = "_none_"
+
     # ── File filter ───────────────────────────────────────────────────────────
     exts      = config.ALLOWED_EXTS or set()
     exts_disp = (
@@ -1441,6 +1451,7 @@ async def config_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📡 *Source channel:*\n   ID: {_code(config.SOURCE_CHANNEL or 'not set')}  {src_disp}",
         f"📥 *Dest channel:*\n   ID: {_code(config.DEST_CHANNEL   or 'not set')}  {dst_disp}",
         f"✏️ *Caption replacement:* {repl_disp}",
+        f"➕ *Caption suffix:* {suffix_disp}",
         f"📁 *File filter:* {exts_disp}",
         f"🚫 *Text messages:* {skip_disp}",
         f"🔔 *Notifications:* {notify_disp}",
@@ -1470,7 +1481,7 @@ async def config_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if copy_task and not copy_task.done():
         lines.append("\n▶️ *A /copy job is currently running.* Use /status for progress.")
 
-    lines.append("\n_Edit config.py to change defaults._")
+    lines.append("\n_Edit Railway Variables to change defaults. Use /setcaption to override suffix for the current session._")
 
     await update.message.reply_text("\n\n".join(lines), parse_mode="Markdown")
 
