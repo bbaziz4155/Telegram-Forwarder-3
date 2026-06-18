@@ -5,7 +5,7 @@ then fall back to the hardcoded defaults below.
 Set these in your Railway environment variables to override without
 touching this file:
   ADMIN_ID, SOURCE_CHANNEL, DEST_CHANNEL, CAPTION_REPLACE,
-  NOTIFY_EVERY, ALLOWED_EXTS, SKIP_TEXT
+  CAPTION_SUFFIX, NOTIFY_EVERY, ALLOWED_EXTS, SKIP_TEXT
 
 How to find a channel ID:
   Forward any message from the channel to @userinfobot — it shows the ID.
@@ -40,6 +40,15 @@ DEST_CHANNEL = _int_env("DEST_CHANNEL", -1003563437550)
 
 # ── Your channel link — replaces ALL @usernames AND t.me links in captions ───
 CAPTION_REPLACE = os.environ.get("CAPTION_REPLACE", "@BackupChannel5211")
+
+# ── Caption suffix — appended as a new line to every copied file's caption ───
+# Set CAPTION_SUFFIX in Railway Variables to pre-configure the watermark so
+# you don't have to run /setcaption after every fresh deployment.
+# Example: CAPTION_SUFFIX=📌 @YourChannel
+# Leave empty (the default) to copy captions as-is.
+# /setcaption in the bot overrides this per-session; clearing it with
+# /setcaption off falls back to this env-var default on the next restart.
+CAPTION_SUFFIX = os.environ.get("CAPTION_SUFFIX", "")
 
 # ── Notify every N files copied (0 = off) ────────────────────────────────────
 NOTIFY_EVERY = _int_env("NOTIFY_EVERY", 100)
