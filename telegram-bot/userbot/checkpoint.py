@@ -6,7 +6,11 @@ Also stores the set of already-copied source message IDs so that re-running
 /copy on a channel that was already copied skips duplicates automatically.
 
 Checkpoint file location:
-    telegram-bot/data/checkpoints/<source_id>_<dest_id>.json
+    <DATA_DIR>/checkpoints/<source_id>_<dest_id>.json
+
+DATA_DIR defaults to telegram-bot/data/ but can be overridden via the
+DATA_DIR environment variable to point at a Railway Volume or any
+other persistent mount.
 """
 import json
 import logging
@@ -15,8 +19,9 @@ import time
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 CHECKPOINTS_DIR = os.path.join(
-    os.path.dirname(__file__), "..", "data", "checkpoints"
+    os.environ.get("DATA_DIR", _DEFAULT_DATA_DIR), "checkpoints"
 )
 
 
