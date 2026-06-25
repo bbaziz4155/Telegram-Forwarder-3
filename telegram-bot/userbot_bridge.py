@@ -175,6 +175,7 @@ async def _connect_loop(bot_data: dict) -> None:
             bot_data["userbot_client"] = client
             bot_data["userbot_ready"]  = True
             bot_data["userbot_reason"] = ""
+            bot_data.pop("_revocation_alerted", None)  # clear so next revocation sends a fresh alert
             logger.info(f"Userbot bridge connected as {me.first_name} (@{me.username})")
 
             # ── Health-check loop ──────────────────────────────────────────
@@ -187,14 +188,16 @@ async def _connect_loop(bot_data: dict) -> None:
                         break
                     if not await client.is_user_authorized():
                         logger.warning("Userbot session deauthorised — sending alert…")
-                        bot_data["userbot_reason"] = "auth_failed"
+                        bot_data["userbot_reason"] = "session_revoked"
                         copy_was_running = _cancel_copy_task(bot_data)
                         if copy_was_running:
                             bot_data["session_lost_during_copy"] = True
                             logger.warning(
                                 "Active copy task cancelled because session was deauthorised."
                             )
-                        await _send_revocation_alert(bot_data, during_copy=copy_was_running)
+                        if not bot_data.get("_revocation_alerted"):
+                            bot_data["_revocation_alerted"] = True
+                            await _send_revocation_alert(bot_data, during_copy=copy_was_running)
                         break
                 except Exception as e:
                     logger.warning(f"Userbot health-check failed: {e} — reconnecting…")
@@ -206,6 +209,16 @@ async def _connect_loop(bot_data: dict) -> None:
                 await client.disconnect()
             except Exception:
                 pass
+            # Session revoked → don't spam reconnects with the same dead string.
+            # Railway will restart the container when user sets a new SESSION_STRING.
+            if bot_data.get("userbot_reason") == "session_revoked":
+                logger.warning(
+                    "Session revoked — waiting for redeploy with new SESSION_STRING. "
+                    "Run /gensession, update Railway env var, then let it redeploy."
+                )
+                while bot_data.get("userbot_reason") == "session_revoked":
+                    await asyncio.sleep(60)
+                continue
             await asyncio.sleep(_FAST_DELAY)
             continue
 
@@ -230,13 +243,17 @@ async def _connect_loop(bot_data: dict) -> None:
                 await asyncio.sleep(delay)
             elif _is_auth_error(e):
                 logger.error(f"Userbot auth error (session invalid/revoked): {e}")
-                bot_data["userbot_reason"] = "auth_failed"
+                bot_data["userbot_reason"] = "session_revoked"
                 copy_was_running = _cancel_copy_task(bot_data)
                 if copy_was_running:
                     bot_data["session_lost_during_copy"] = True
                     logger.warning("Active copy task cancelled due to auth error.")
-                await _send_revocation_alert(bot_data, during_copy=copy_was_running)
-                await asyncio.sleep(_SLOW_DELAY)
+                if not bot_data.get("_revocation_alerted"):
+                    bot_data["_revocation_alerted"] = True
+                    await _send_revocation_alert(bot_data, during_copy=copy_was_running)
+                logger.warning("Session revoked — waiting for redeploy with new SESSION_STRING.")
+                while bot_data.get("userbot_reason") == "session_revoked":
+                    await asyncio.sleep(60)
             else:
                 logger.error(f"Userbot connect failed: {e}")
                 bot_data["userbot_reason"] = "reconnecting"
