@@ -97,6 +97,10 @@ class ProgressNotifier:
         """Called when a FloodWaitError occurs. Override to notify the user."""
         pass
 
+    async def scan_progress(self, scanned: int, unique: int):
+        """Called periodically during destination pre-scan. Override to notify the user."""
+        pass
+
     async def done(
         self,
         copied: int,
