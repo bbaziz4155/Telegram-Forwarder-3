@@ -150,53 +150,53 @@ async def post_init(application: Application):
     ])
 
 
-  async def post_shutdown(application: Application):
-      """
-      Called by PTB when the process is shutting down (SIGTERM / SIGINT).
+async def post_shutdown(application: Application):
+    """
+    Called by PTB when the process is shutting down (SIGTERM / SIGINT).
 
-      Cancels active tasks and disconnects Telethon BEFORE the process exits so
-      Telegram does not see two simultaneous connections and revoke the session.
-      This is the root fix for session revocations caused by Railway redeploys.
+    Cancels active tasks and disconnects Telethon BEFORE the process exits so
+    Telegram does not see two simultaneous connections and revoke the session.
+    This is the root fix for session revocations caused by Railway redeploys.
 
-      PTB v21 run_polling() catches SIGTERM automatically and calls this hook
-      during its shutdown sequence — no custom signal wiring is needed.
-      """
-      bot_data = application.bot_data
-      logger.info("Graceful shutdown: cancelling tasks and disconnecting Telethon…")
+    PTB v21 run_polling() catches SIGTERM automatically and calls this hook
+    during its shutdown sequence — no custom signal wiring is needed.
+    """
+    bot_data = application.bot_data
+    logger.info("Graceful shutdown: cancelling tasks and disconnecting Telethon…")
 
-      # ── 1. Cancel active copy / sync / clean jobs ─────────────────────────────
-      for key in ("active_copy_task", "active_sync_task", "active_clean_task"):
-          task = bot_data.get(key)
-          if task and not task.done():
-              task.cancel()
-              try:
-                  await asyncio.wait_for(asyncio.shield(task), timeout=5.0)
-              except Exception:
-                  pass  # cancelled / timed out — that's fine
+    # ── 1. Cancel active copy / sync / clean jobs ─────────────────────────────
+    for key in ("active_copy_task", "active_sync_task", "active_clean_task"):
+        task = bot_data.get(key)
+        if task and not task.done():
+            task.cancel()
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout=5.0)
+            except Exception:
+                pass  # cancelled / timed out — that's fine
 
-      # ── 2. Cancel the userbot background connect/reconnect loop ───────────────
-      connect_task = bot_data.get("_userbot_connect_task")
-      if connect_task and not connect_task.done():
-          connect_task.cancel()
-          try:
-              await asyncio.wait_for(asyncio.shield(connect_task), timeout=3.0)
-          except Exception:
-              pass
+    # ── 2. Cancel the userbot background connect/reconnect loop ───────────────
+    connect_task = bot_data.get("_userbot_connect_task")
+    if connect_task and not connect_task.done():
+        connect_task.cancel()
+        try:
+            await asyncio.wait_for(asyncio.shield(connect_task), timeout=3.0)
+        except Exception:
+            pass
 
-      # ── 3. Disconnect Telethon cleanly ────────────────────────────────────────
-      client = bot_data.get("userbot_client")
-      if client is not None:
-          try:
-              await asyncio.wait_for(client.disconnect(), timeout=10.0)
-              logger.info("Graceful shutdown: Telethon disconnected cleanly.")
-          except Exception as e:
-              logger.warning("Graceful shutdown: Telethon disconnect error: %s", e)
-      else:
-          logger.info("Graceful shutdown: no Telethon client to disconnect.")
+    # ── 3. Disconnect Telethon cleanly ────────────────────────────────────────
+    client = bot_data.get("userbot_client")
+    if client is not None:
+        try:
+            await asyncio.wait_for(client.disconnect(), timeout=10.0)
+            logger.info("Graceful shutdown: Telethon disconnected cleanly.")
+        except Exception as e:
+            logger.warning("Graceful shutdown: Telethon disconnect error: %s", e)
+    else:
+        logger.info("Graceful shutdown: no Telethon client to disconnect.")
 
-      logger.info("Graceful shutdown complete — process will now exit.")
+    logger.info("Graceful shutdown complete — process will now exit.")
 
-  
+
 def build_app(token: str) -> Application:
     _data_dir = os.environ.get(
         "DATA_DIR", os.path.join(os.path.dirname(__file__), "data")
