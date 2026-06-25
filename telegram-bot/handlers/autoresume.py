@@ -16,7 +16,11 @@ import os
 
 logger = logging.getLogger(__name__)
 
-_RESUME_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "autoresume.json")
+# Respect DATA_DIR so autoresume.json lives on the same persistent volume
+# as channel_settings.json and checkpoints/ (prevents stale-channel on redeploy).
+_DATA_DIR    = os.environ.get("DATA_DIR",
+               os.path.join(os.path.dirname(__file__), "..", "data"))
+_RESUME_FILE = os.path.join(_DATA_DIR, "autoresume.json")
 
 
 def save_resume(chat_id: int, src, dst, opts: dict) -> None:
