@@ -33,6 +33,7 @@ async def start_sync_handler(
     dest,
     allowed_exts: set = None,
     caption_replacement: str = "",
+    caption_suffix: str = "",
     skip_text: bool = False,
     on_forwarded=None,
 ):
@@ -75,6 +76,7 @@ async def start_sync_handler(
         result = await send_album(
             client, dest_entity, msgs,
             caption_replacement=caption_replacement,
+            caption_suffix=caption_suffix,
         )
         if result == "ok":
             stats["copied"] += len(msgs)
@@ -110,6 +112,7 @@ async def start_sync_handler(
             result = await _do_send(
                 client, dest_entity, msg,
                 caption_replacement=caption_replacement,
+                caption_suffix=caption_suffix,
             )
             if result == "ok":
                 stats["copied"] += 1
