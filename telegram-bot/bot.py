@@ -33,6 +33,7 @@ from handlers import strippatterns as strippatterns_handler
 from handlers import purgedups as purgedups_handler
 from handlers import setchannel as setchannel_handler
 from handlers import channelinfo as channelinfo_handler
+from handlers import restart as restart_handler
 from states import (
     MAIN_MENU,
     ADD_RULE_SOURCE,
@@ -147,6 +148,7 @@ async def post_init(application: Application):
         BotCommand("speed",          "⚡ Set copy speed (safe / fast / turbo)"),
         # ── Admin ─────────────────────────────────────────────────────────────
         BotCommand("cancel",         "✖️ Cancel current wizard/operation"),
+        BotCommand("restart",        "♻️ Restart the bot process (owner only)"),
     ])
 
 
@@ -339,6 +341,8 @@ def build_app(token: str) -> Application:
 
     for h in channelinfo_handler.get_handlers():
         app.add_handler(h)
+
+    app.add_handler(CommandHandler("restart", restart_handler.restart_cmd))
 
     app.add_handler(MessageHandler(filters.COMMAND, menu_handler.unknown_command))
     app.add_handler(
