@@ -2074,12 +2074,12 @@ async def _auto_resume_start(application, resume: dict, countdown_msg_id: int | 
     dst      = resume["dst"]
     opts     = resume["opts"]
 
-    # Defensive: always use the current configured channels so a stale
-    # autoresume.json can never silently copy to the wrong channel.
-    if config.SOURCE_CHANNEL:
-        src = config.SOURCE_CHANNEL
-    if config.DEST_CHANNEL:
-        dst = config.DEST_CHANNEL
+    # NOTE: we do NOT override src/dst from config here.
+    # channel_settings.py guarantees that config.SOURCE_CHANNEL and
+    # config.DEST_CHANNEL always equal the last /setsource and /setdest values,
+    # and autoresume.clear_resume() is called whenever channels change — so the
+    # stored src/dst in autoresume.json is always the correct target.
+    # Overriding here would break any resume whose channels differ from env vars.
 
     client = bridge.get_client(bot_data)
     if client is None:
