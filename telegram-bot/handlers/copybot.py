@@ -2005,8 +2005,8 @@ async def ar_cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     try:
         await query.edit_message_text(
             "❌ *Auto-resume cancelled.*\n\n"
-            "The saved checkpoint is still on disk — use /resume to restart "
-            "it manually whenever you're ready.",
+            "The checkpoint has been deleted.\n"
+            "Use /copy to start a new job, or /resume if you want to retry.",
             parse_mode="Markdown",
         )
     except Exception:
@@ -2080,6 +2080,35 @@ async def schedule_auto_resume(application) -> None:
     chat_id = resume.get("chat_id")
     src     = resume.get("src")
     dst     = resume.get("dst")
+
+    # ── Stale-channel guard ─────────────────────────────────────────────────────────────────────────
+    # If the user changed source/destination with /setsource or /setdest
+    # while the bot was offline, the checkpoint belongs to the OLD channels.
+    # Resuming it would silently copy the wrong channel, so abort + delete.
+    cfg_src = config.SOURCE_CHANNEL
+    cfg_dst = config.DEST_CHANNEL
+    src_changed = cfg_src and str(src) != str(cfg_src)
+    dst_changed = cfg_dst and str(dst) != str(cfg_dst)
+    if src_changed or dst_changed:
+        _ar.clear_resume()
+        logger.info(
+            "Auto-resume: checkpoint channels (%s->%s) differ from configured "
+            "channels (%s->%s) — checkpoint deleted, skipping auto-resume.",
+            src, dst, cfg_src, cfg_dst,
+        )
+        try:
+            await application.bot.send_message(
+                chat_id,
+                "\u267b\ufe0f *Auto-Resume Skipped*\n\n"
+                "The checkpoint was for *different channels* than your current "
+                "/channels setting, so it was discarded.\n\n"
+                "Use /copy to start a fresh job with your new channels.",
+                parse_mode="Markdown",
+            )
+        except Exception:
+            pass
+        return
+    # ──────────────────────────────────────────────────────────────────────────────
 
     logger.info(
         "Auto-resume: found saved job (src=%s dst=%s chat=%s) — waiting for userbot…",
