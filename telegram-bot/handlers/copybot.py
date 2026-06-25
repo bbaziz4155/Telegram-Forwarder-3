@@ -977,6 +977,7 @@ async def _run_sync(client, src, dst, opts, bot, chat_id, bot_data):
             client, src, dst,
             allowed_exts=opts["allowed_exts"],
             caption_replacement=opts["caption_replacement"],
+            caption_suffix=opts.get("caption_suffix", ""),
             skip_text=opts["skip_text"],
             on_forwarded=on_forwarded,
         )
