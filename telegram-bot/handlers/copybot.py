@@ -3301,6 +3301,52 @@ async def clearresume_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+
+async def dualsetup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /dualsetup -- show step-by-step guide to activate dual-account parallel copy.
+    Informational only -- no changes are made to the bot.
+    """
+    msg = (
+        "⚡ *Dual-Account Parallel Copy — Setup Guide*\n\n"
+        "This feature uses *two Telegram accounts simultaneously*, each copying half\n"
+        "the source channel at the same time. Result: *2× speed*.\n\n"
+        "──────────────────────────────\n"
+        "*Step 1 — Create a second Telegram account*\n"
+        "Use any free phone number (SIM or virtual). Keep it logged in.\n\n"
+        "*Step 2 — Get API credentials for account 2*\n"
+        "1. Open my.telegram.org in a browser\n"
+        "2. Log in with the *second* account's phone number\n"
+        "3. Go to API Development Tools\n"
+        "4. Create an app (any name is fine)\n"
+        "5. Copy the `api\_id` and `api\_hash` shown\n\n"
+        "*Step 3 — Generate a session string for account 2*\n"
+        "Run this Python snippet once on any machine:\n"
+        "`from telethon.sync import TelegramClient`\n"
+        "`from telethon.sessions import StringSession`\n"
+        "`api = TelegramClient(StringSession(), API\_ID\_2, API\_HASH\_2)`\n"
+        "`api.start() ; print(api.session.save())`\n"
+        "Log in with the second account OTP when prompted.\n"
+        "Copy the long string it prints.\n\n"
+        "*Step 4 — Add 3 env vars in Railway*\n"
+        "`API\_ID\_2` → the api\_id from Step 2\n"
+        "`API\_HASH\_2` → the api\_hash from Step 2\n"
+        "`SESSION\_STRING\_2` → the long string from Step 3\n\n"
+        "*Step 5 — Add account 2 to both channels*\n"
+        "• *Source channel*: invite account 2 as a member\n"
+        "• *Destination channel*: add account 2 as admin with Post Messages permission\n\n"
+        "*Step 6 — Redeploy on Railway*\n"
+        "Add the env vars, redeploy, then use /copy and toggle *Dual Copy* on.\n\n"
+        "──────────────────────────────\n"
+        "ℹ️ *Notes*\n"
+        "• Account 2 is a regular user account, not a bot\n"
+        "• If account 2 gets rate-limited, only that worker pauses\n"
+        "• Both accounts write to the same destination so no duplicates\n"
+        "• Use /status to see both workers progress while dual copy runs"
+    )
+    await update.message.reply_text(msg, parse_mode="Markdown", disable_web_page_preview=True)
+
+
 def get_extra_handlers() -> list:
     """Standalone command handlers registered outside the conversation."""
     return [
@@ -3309,6 +3355,7 @@ def get_extra_handlers() -> list:
         CommandHandler("stopjob",   stopjob_cmd),
         CommandHandler("resume",    resume_cmd),
         CommandHandler("clearresume", clearresume_cmd),
+        CommandHandler("dualsetup",   dualsetup_cmd),
         CommandHandler("stopsync",  stopsync_cmd),
         CommandHandler("synctest",  synctest_cmd),
         CommandHandler("listchats", listchats_cmd),
