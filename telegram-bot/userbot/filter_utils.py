@@ -55,7 +55,8 @@ _WATERMARK_RE = re.compile(
 
 # Path to user-managed patterns file (created by /strippatterns command)
 _CUSTOM_PATTERNS_FILE = os.path.join(
-    os.path.dirname(__file__), "..", "data", "strip_patterns.json"
+    os.getenv("DATA_DIR", os.path.join(os.path.dirname(__file__), "..", "data")),
+    "strip_patterns.json",
 )
 
 
