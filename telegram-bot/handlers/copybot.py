@@ -448,10 +448,11 @@ async def got_dest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     src_raw = context.user_data["copy_src_raw"]
     dst_raw = context.user_data["copy_dst_raw"]
 
+    _dual_avail = bridge.is_ready_2(context.bot_data)
     msg = await update.message.reply_text(
         _opts_text(src_raw, dst_raw, opts),
         parse_mode="Markdown",
-        reply_markup=_opts_keyboard(opts),
+        reply_markup=_opts_keyboard(opts, dual_available=_dual_avail),
     )
     context.user_data["opts_msg_id"] = msg.message_id
     return COPY_OPTIONS
@@ -985,6 +986,7 @@ async def _run_dual_copy(client, client_2, src, dst, opts, bot, chat_id, status_
     status_task = asyncio.create_task(_status_loop())
 
     cancelled = False
+    errored   = False
     try:
         await asyncio.gather(task_a, task_b)
 
@@ -995,7 +997,8 @@ async def _run_dual_copy(client, client_2, src, dst, opts, bot, chat_id, status_
         await asyncio.gather(task_a, task_b, return_exceptions=True)
 
     except Exception as e:
-        logger.exception("Dual copy error")
+        errored = True
+        logger.exception("Dual copy error: %s", e)
         task_a.cancel()
         task_b.cancel()
         await asyncio.gather(task_a, task_b, return_exceptions=True)
@@ -1017,6 +1020,15 @@ async def _run_dual_copy(client, client_2, src, dst, opts, bot, chat_id, status_
                 f"👤 *Account A:* ✅`{ca:,}` ⏭`{sa_:,}` ❌`{fa_:,}`\n"
                 f"👤 *Account B:* ✅`{cb:,}` ⏭`{sb_:,}` ❌`{fb_:,}`\n\n"
                 f"_Use /copy to start a new job._"
+            )
+        elif errored:
+            _ar.clear_resume()
+            tag = "❌ *Dual Copy Failed (internal error)*"
+            text = (
+                f"{tag}\n\n"
+                f"👤 *Account A:* ✅`{ca:,}` ⏭`{sa_:,}` ❌`{fa_:,}`\n"
+                f"👤 *Account B:* ✅`{cb:,}` ⏭`{sb_:,}` ❌`{fb_:,}`\n\n"
+                f"_Check logs for details. Use /copy to start a new job._"
             )
         else:
             _ar.clear_resume()
