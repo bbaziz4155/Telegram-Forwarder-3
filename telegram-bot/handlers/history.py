@@ -135,6 +135,7 @@ async def history_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         from userbot.sender import _do_send, send_album
         from userbot.filter_utils import matches_filter
         caption_replacement = config.CAPTION_REPLACE
+        caption_suffix = getattr(config, "CAPTION_SUFFIX", "")
 
         copied  = 0
         skipped = 0
@@ -178,7 +179,8 @@ async def history_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if not msgs_in:
                     return
                 result = await send_album(client, dest_entity, msgs_in,
-                                          caption_replacement=caption_replacement)
+                                          caption_replacement=caption_replacement,
+                                          caption_suffix=caption_suffix)
                 if result == "ok":
                     copied += len(msgs_in)
                 elif result == "skip":
@@ -203,7 +205,8 @@ async def history_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         skipped += 1
                     else:
                         result = await _do_send(client, dest_entity, msg,
-                                                caption_replacement=caption_replacement)
+                                                caption_replacement=caption_replacement,
+                                                caption_suffix=caption_suffix)
                         if result == "ok":
                             copied += 1
                         elif result == "skip":
