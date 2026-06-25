@@ -119,11 +119,8 @@ async def post_init(application: Application):
         if _chat_id and _elapsed < 300:  # only notify if within 5 min of restart
             await application.bot.send_message(
                 _chat_id,
-                "✅ *Bot restarted successfully\!*
-
-"
-                "All systems are back online\.
-"
+                "✅ *Bot restarted successfully\!*\n\n"
+                "All systems are back online\.\n"
                 "Userbot is reconnecting — use /status in a moment to check\.",
                 parse_mode="MarkdownV2",
             )
