@@ -200,10 +200,9 @@ class BotProgressNotifier(ProgressNotifier):
         try:
             await self.bot.edit_message_text(
                 f"🔍 *Pre-scanning destination…*\n\n"
-                f"Scanned: `{scanned:,}` messages\n"
-                f"Unique files found: `{unique:,}`\n\n"
-                "_Checking what's already copied to prevent duplicates.\n"
-                "Send /stopjob to skip the scan and start immediately._",
+                f"Files found: `{scanned:,}` (unique: `{unique:,}`)\n\n"
+                "_Checking what's already in the destination to prevent duplicates.\n"
+                "Send /stopjob to skip and start immediately._",
                 chat_id=self.chat_id,
                 message_id=self.message_id,
                 parse_mode="Markdown",
