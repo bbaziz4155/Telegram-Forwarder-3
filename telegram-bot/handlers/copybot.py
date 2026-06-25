@@ -2151,6 +2151,34 @@ async def schedule_auto_resume(application) -> None:
     src     = resume.get("src")
     dst     = resume.get("dst")
 
+    # ── Channel mismatch guard ─────────────────────────────────────────────────
+    # If the user ran /setsource or /setdest since the job was saved, the stored
+    # channels will differ from the current config.  Resuming silently with stale
+    # channels would copy to/from the wrong place — abort and notify instead.
+    _cfg_src = config.SOURCE_CHANNEL
+    _cfg_dst = config.DEST_CHANNEL
+    if src != _cfg_src or dst != _cfg_dst:
+        logger.warning(
+            "Auto-resume: channel mismatch — saved (src=%s dst=%s) vs config (src=%s dst=%s). "
+            "Cancelling to prevent wrong-channel copy.",
+            src, dst, _cfg_src, _cfg_dst,
+        )
+        _ar.clear_resume()
+        try:
+            await application.bot.send_message(
+                chat_id,
+                f"⚠️ *Auto-Resume Cancelled*\n\n"
+                f"The saved job used *different channels* than your current settings:\n\n"
+                f"💾 Saved job:  `{src}` → `{dst}`\n"
+                f"⚙️ Current:    `{_cfg_src}` → `{_cfg_dst}`\n\n"
+                f"Auto-resume was stopped to prevent copying to/from the wrong channel.\n\n"
+                f"Use /copy to start a fresh job with your current channels.",
+                parse_mode="Markdown",
+            )
+        except Exception as _me:
+            logger.warning("Auto-resume: could not send mismatch notice: %s", _me)
+        return
+
     logger.info(
         "Auto-resume: found saved job (src=%s dst=%s chat=%s) — waiting for userbot…",
         src, dst, chat_id,
