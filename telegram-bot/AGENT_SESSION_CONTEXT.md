@@ -233,6 +233,52 @@ All 5 items from Session 5 are resolved as of Session 6. Bot is fully operationa
 
 ---
 
+## Future Feature: Permanent Session-Revocation Fix
+
+### Root cause
+Railway deploys with a "start new → kill old" strategy by default. During a redeploy,
+both the old and new container run simultaneously and both try to connect to Telegram
+with the same account from two different IPs. Telegram detects a duplicate login and
+revokes the session.
+
+### Fix (3 layers — implement together)
+
+**Layer 1 — Railway setting (most important, zero code)**
+In Railway service → Settings → Deploy:
+- Set deploy strategy to "kill old first, then start new" (no overlap)
+- Add env var `RAILWAY_DEPLOYMENT_OVERLAP_SECONDS=0` as a belt-and-suspenders guard
+- Make sure the healthcheck timeout is generous enough (≥30 s) so Railway waits for
+  the bot to fully start before declaring it healthy
+
+**Layer 2 — StringSession stored as Railway env var**
+- Replace the current file-based Telethon session with `telethon.sessions.StringSession`
+- On first `/login`, after OTP auth completes, call `client.session.save()` to get the
+  session string and store it in a Railway env var named `TELETHON_SESSION`
+- On every startup, load it: `TelegramClient(StringSession(os.environ["TELETHON_SESSION"]), ...)`
+- Benefit: no file-lock contention between containers; string can be backed up easily
+
+  Files to change: `userbot/userbot_bridge.py` (client construction) + `handlers/login.py` (post-auth export)
+
+**Layer 3 — SessionRevokedError auto-detection**
+- In `userbot_bridge.py`, catch `telethon.errors.SessionRevokedError` around `client.connect()`
+- On revocation: set bridge as not-ready, send admin a Telegram message:
+  "⚠️ Telethon session was revoked by Telegram. Use /login to re-authenticate."
+- Add `/exportsession` admin command that calls `client.session.save()` and DMs you the
+  string — paste it into Railway env vars so every redeploy uses the freshest session
+
+### Why this is permanent
+- Layer 1 ensures only one container ever connects at a time
+- Layer 2 removes file-system contention and survives Railway volume hiccups
+- Layer 3 means revocation is immediately visible in Telegram, not a silent crash
+
+### Files to touch
+- `telegram-bot/userbot/userbot_bridge.py` — client construction + revocation catch
+- `telegram-bot/handlers/login.py` — export session string after successful OTP auth
+- `telegram-bot/handlers/copybot.py` (or new `handlers/session_mgmt.py`) — `/exportsession` cmd
+- Railway dashboard — `TELETHON_SESSION` env var + `RAILWAY_DEPLOYMENT_OVERLAP_SECONDS=0`
+
+---
+
 ## Session Timeline (all sessions)
 - **Sessions 1–3**: Basic copy, auto-resume, multi-dest, dryrun, sync, speed control
 - **Session 4**: Session revocation fix, remove channel override in _auto_resume_start, clear session_lost flag on reconnect, /stoppurge in BotCommand menu, restart_pending.json notification flow
