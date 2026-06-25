@@ -16,7 +16,7 @@ def main_menu_keyboard(userbot_ready: bool = False):
     )
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📡 Add Auto-Forward",   callback_data="add_rule")],
-        [InlineKeyboardButton("📋 My Auto-Forwards", callback_data="list_rules")],
+        [InlineKeyboardButton("📋 My Auto-Forwards",   callback_data="list_rules")],
         [InlineKeyboardButton("🗑 Remove Auto-Forward", callback_data="delete_rule")],
         [InlineKeyboardButton("📜 Forward History",    callback_data="fwd_history")],
         [InlineKeyboardButton("🚫 Ignore List",        callback_data="ignore_list")],
@@ -24,7 +24,8 @@ def main_menu_keyboard(userbot_ready: bool = False):
          InlineKeyboardButton("📊 Status",             callback_data="status_menu")],
         [InlineKeyboardButton("📡 List My Chats",      callback_data="listchats_menu")],
         [InlineKeyboardButton("👥 Manage Admins",      callback_data="admin_mgmt")],
-        [InlineKeyboardButton("ℹ️ Help",               callback_data="help")],
+        [InlineKeyboardButton("ℹ️ Help",               callback_data="help"),
+         InlineKeyboardButton("📋 Commands",           callback_data="commands")],
     ])
 
 
@@ -87,6 +88,10 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  `/setcaption 📌 @YourChannel` sets it · `/setcaption off` removes it\n"
         "• /cleancaptions — Scan destination channel and strip watermark lines\n"
         "• /stopcleaning — Cancel a running /cleancaptions job\n\n"
+        "*Channel defaults:*\n"
+        "• /setsource — Set default source channel\n"
+        "• /setdest — Set default destination channel\n"
+        "• /channels — Show current source & destination\n\n"
         "*Admin management:*\n"
         "• 👥 *Manage Admins* — Add or remove users who can access this bot\n\n"
         "*Session management:*\n"
@@ -95,22 +100,82 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "*Important:* The bot must be an admin in destination chats.\n"
         "For /copy and /sync, you only need to be a *member* of the source channel."
     )
+    back_markup = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("⬅️ Back", callback_data="menu")]]
+    )
     query = update.callback_query
     if query:
         await query.answer()
-        await query.edit_message_text(
-            text,
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("⬅️ Back", callback_data="menu")]]
-            ),
-        )
+        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=back_markup)
     else:
         await update.message.reply_text(
             text,
             parse_mode="Markdown",
             reply_markup=main_menu_keyboard(_ready(context)),
         )
+    return MAIN_MENU
+
+
+async def commands_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "📋 *All Commands*\n"
+        "_(Admin access only)_\n\n"
+
+        "🏠 *Navigation*\n"
+        "`/start` or `/menu` — Open the main menu\n"
+        "`/help` — Full feature guide\n"
+        "`/cancel` — Cancel current wizard\n\n"
+
+        "🔑 *Session & Auth*\n"
+        "`/login` — Connect your Telegram account\n"
+        "`/gensession` — Generate SESSION\\_STRING in-chat\n"
+        "`/deletesession` — Revoke the active session\n\n"
+
+        "📡 *Channel Defaults*\n"
+        "`/setsource <id>` — Set default source channel\n"
+        "`/setdest <id>` — Set default destination channel\n"
+        "`/channels` — Show current source & destination\n\n"
+
+        "📦 *Copy Jobs*\n"
+        "`/copy` — Bulk copy files (no forward tag)\n"
+        "`/dryrun` — Preview copy without sending anything\n"
+        "`/resume` — Resume an interrupted copy job\n"
+        "`/status` — Check copy job progress\n"
+        "`/stopjob` — Cancel the running copy job\n\n"
+
+        "🔄 *Sync*\n"
+        "`/sync` — Start live auto-sync (new messages)\n"
+        "`/stopsync` — Stop the auto-sync\n"
+        "`/synctest` — Test sync connection\n\n"
+
+        "✏️ *Captions*\n"
+        "`/setcaption <text>` — Set caption suffix · `/setcaption off` removes it\n"
+        "`/previewcaption` — Preview caption after stripping\n"
+        "`/strippatterns` — Manage caption strip patterns\n"
+        "`/striptest` — Test a pattern on sample text\n"
+        "`/cleancaptions` — Strip watermarks from destination channel\n"
+        "`/stopcleaning` — Cancel a running cleancaptions job\n\n"
+
+        "🗑 *Maintenance*\n"
+        "`/purgedups` — Delete duplicate files in destination\n"
+        "`/clearhistory` — Clear copy job checkpoints\n\n"
+
+        "📊 *Stats & Info*\n"
+        "`/stats` — Dedup statistics across all jobs\n"
+        "`/history` — Per-channel copy history\n"
+        "`/config` — Show all active bot settings\n"
+        "`/speed` — Change copy speed (Safe/Normal/Fast/Turbo)\n"
+        "`/listchats` — List all chats your userbot can see\n"
+    )
+    back_markup = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("⬅️ Back", callback_data="menu")]]
+    )
+    query = update.callback_query
+    if query:
+        await query.answer()
+        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=back_markup)
+    else:
+        await update.message.reply_text(text, parse_mode="Markdown", reply_markup=back_markup)
     return MAIN_MENU
 
 
