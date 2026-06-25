@@ -264,6 +264,8 @@ async def _connect_loop(bot_data: dict) -> None:
             # Clear the revocation flag — this session string is working fine
             _clear_revoked_flag()
             bot_data.pop("_revocation_alerted", None)
+            # Clear the mid-copy session-loss warning now that a fresh session is live
+            bot_data.pop("session_lost_during_copy", None)
             logger.info("Userbot bridge connected as %s (@%s)", me.first_name, me.username)
 
             # ── Health-check loop ──────────────────────────────────────────
