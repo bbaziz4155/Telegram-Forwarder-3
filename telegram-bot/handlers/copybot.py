@@ -372,10 +372,24 @@ async def _start_wizard(update: Update, context: ContextTypes.DEFAULT_TYPE, mode
         "dryrun": "🔍 *Dry Run* — preview only, nothing is sent",
         "sync":   "🔄 *Auto-Sync* — forward new messages instantly",
     }
+
+    # Source already configured: pre-fill it and jump straight to the dest prompt
+    if config.SOURCE_CHANNEL:
+        context.user_data["copy_src"]     = config.SOURCE_CHANNEL
+        context.user_data["copy_src_raw"] = str(config.SOURCE_CHANNEL)
+        await update.message.reply_text(
+            f"{labels[mode]}\n\n"
+            f"📡 Source: `{config.SOURCE_CHANNEL}` ✓\n\n"
+            "📥 Enter the *destination* channel ID or @username:\n"
+            "_(e.g. `-1001234567890`)_",
+            parse_mode="Markdown",
+        )
+        return COPY_AWAIT_DST
+
     await update.message.reply_text(
         f"{labels[mode]}\n\n"
         f"Enter the *source* channel ID or @username:\n"
-        f"_(e.g. `-1001811670072`)_",
+        f"_(e.g. `-1001234567890`)_",
         parse_mode="Markdown",
     )
     return COPY_AWAIT_SRC
@@ -391,13 +405,13 @@ async def got_source(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if mode == "sync":
         await update.message.reply_text(
             "📥 Enter the *destination* channel ID or @username:\n"
-            "_(e.g. `-1003563437550`)_",
+            "_(e.g. `-1001234567890`)_",
             parse_mode="Markdown",
         )
     else:
         await update.message.reply_text(
             "📥 Enter the *destination* channel ID or @username:\n"
-            "_(e.g. `-1003563437550`)_\n\n"
+            "_(e.g. `-1001234567890`)_\n\n"
             "💡 *Multiple destinations?* Separate IDs with commas:\n"
             "_(e.g. `-1001234567890, -1009876543210, -1005555555555`)_",
             parse_mode="Markdown",
