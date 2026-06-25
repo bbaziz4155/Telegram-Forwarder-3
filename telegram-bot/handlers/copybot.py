@@ -57,12 +57,16 @@ class BotProgressNotifier(ProgressNotifier):
     """Sends copy progress by editing a PTB bot message."""
 
     def __init__(self, bot, chat_id: int, message_id: int, every: int = 100,
-                 bot_data: dict = None):
+                 bot_data: dict = None,
+                 stats_key: str = "active_copy_stats",
+                 flood_key: str = "active_flood_wait"):
         self.bot          = bot
         self.chat_id      = chat_id
         self.message_id   = message_id
         self.every        = every
         self.bot_data     = bot_data   # written on every tick so /status is always fresh
+        self.stats_key    = stats_key
+        self.flood_key    = flood_key
         self._last_notify = 0
         self._last_edit   = 0.0
         self._started     = time.time()
@@ -89,7 +93,7 @@ class BotProgressNotifier(ProgressNotifier):
     async def tick(self, copied, skipped, failed, total, source_name="", dest_name=""):
         # Always update live stats so /status reads real numbers
         if self.bot_data is not None:
-            self.bot_data["active_copy_stats"] = {
+            self.bot_data[self.stats_key] = {
                 "copied": copied, "skipped": skipped,
                 "failed": failed, "total":  total,
             }
@@ -157,7 +161,7 @@ class BotProgressNotifier(ProgressNotifier):
     async def flood_wait(self, seconds: int):
         # Always record in bot_data so /status shows a countdown regardless of size
         if self.bot_data is not None:
-            self.bot_data["active_flood_wait"] = {
+            self.bot_data[self.flood_key] = {
                 "until":   time.time() + seconds,
                 "seconds": seconds,
             }
@@ -257,10 +261,11 @@ def _default_opts(mode: str) -> dict:
         "notify_every":        config.NOTIFY_EVERY if mode != "sync" else 0,
         "speed_idx":           0,                      # index into _SPEED_CYCLE
         "rate_delay":          _SPEED_CYCLE[0][1],     # seconds between sends
+        "dual_copy":           False,                  # use two accounts in parallel
     }
 
 
-def _opts_keyboard(opts: dict) -> InlineKeyboardMarkup:
+def _opts_keyboard(opts: dict, dual_available: bool = False) -> InlineKeyboardMarkup:
     mode = opts["mode"]
     skip_lbl   = f"{'✅' if opts['skip_text'] else '📝'} Text posts: {'SKIP' if opts['skip_text'] else 'INCLUDE (season labels, hashtags)'}"
     filter_lbl = f"📁 File filter: {opts['filter_label']}"
@@ -281,6 +286,11 @@ def _opts_keyboard(opts: dict) -> InlineKeyboardMarkup:
 
         speed_lbl = _SPEED_CYCLE[opts.get("speed_idx", 0)][0]
         rows.append([InlineKeyboardButton(f"⏩ Speed: {speed_lbl}", callback_data="copt_speed")])
+
+        if dual_available or opts.get("dual_copy"):
+            _dual_on = opts.get("dual_copy")
+            dual_lbl = ("✅ Dual Copy: ON" if _dual_on else "🔀 Dual Copy: OFF")
+            rows.append([InlineKeyboardButton(dual_lbl, callback_data="copt_dual")])
 
     start_labels = {
         "copy":   "▶ Start Copy",
@@ -502,14 +512,18 @@ async def options_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         opts["speed_idx"]  = idx
         opts["rate_delay"] = _SPEED_CYCLE[idx][1]
 
+    elif data == "copt_dual":
+        opts["dual_copy"] = not opts.get("dual_copy", False)
+
     elif data == "copt_start":
         await _launch_job(query, context, opts, src_raw, dst_raw)
         return ConversationHandler.END
 
+    _dual_avail = bridge.is_ready_2(context.bot_data)
     await query.edit_message_text(
         _opts_text(src_raw, dst_raw, opts),
         parse_mode="Markdown",
-        reply_markup=_opts_keyboard(opts),
+        reply_markup=_opts_keyboard(opts, dual_available=_dual_avail),
     )
     return COPY_OPTIONS
 
@@ -582,13 +596,27 @@ async def _launch_job(query, context: ContextTypes.DEFAULT_TYPE, opts: dict, src
         context.bot_data["active_copy_task"] = task
 
     elif mode == "copy":
-        status_msg = await bot.send_message(chat_id, "⏳ Initializing copy…")
         opts["caption_suffix"] = context.user_data.get("caption_suffix", config.CAPTION_SUFFIX)
         _ar.save_resume(chat_id, src, dsts[0], opts)
-        task = asyncio.create_task(
-            _run_multi_copy(client, src, dsts, dsts_raw, opts, bot, chat_id,
-                            status_msg.message_id, context.bot_data)
-        )
+        if opts.get("dual_copy") and bridge.is_ready_2(context.bot_data) and len(dsts) == 1:
+            client_2 = bridge.get_client_2(context.bot_data)
+            await query.edit_message_text(
+                f"🔀 *Dual Copy started!*\n\n"
+                f"📡 `{src_raw}` → `{dst_raw}`\n\n"
+                f"_Two accounts copying in parallel — progress below…_",
+                parse_mode="Markdown",
+            )
+            status_msg = await bot.send_message(chat_id, "⏳ Initializing dual copy…")
+            task = asyncio.create_task(
+                _run_dual_copy(client, client_2, src, dsts[0], opts, bot, chat_id,
+                               status_msg.message_id, context.bot_data)
+            )
+        else:
+            status_msg = await bot.send_message(chat_id, "⏳ Initializing copy…")
+            task = asyncio.create_task(
+                _run_multi_copy(client, src, dsts, dsts_raw, opts, bot, chat_id,
+                                status_msg.message_id, context.bot_data)
+            )
         context.bot_data["active_copy_task"]  = task
         context.bot_data["active_status_msg"] = (chat_id, status_msg.message_id)
 
@@ -810,6 +838,213 @@ async def _run_multi_copy(client, src, dsts, dsts_raw, opts, bot, chat_id, msg_i
     bot_data.pop("active_flood_wait", None)
     bot_data.pop("active_copy_stats", None)
     bot_data.pop("active_copy_delay", None)
+
+
+
+# ── Dual-account parallel copy ─────────────────────────────────────────────────
+
+async def _run_dual_copy(client, client_2, src, dst, opts, bot, chat_id, status_msg_id, bot_data):
+    """
+    Run two parallel copy workers — client handles the newer half of messages,
+    client_2 handles the older half.  Both share the same SQLite dedup table.
+    Progress is shown as two rows in the status message.
+    """
+    bot_data["active_copy_delay"] = opts.get("rate_delay", _SPEED_CYCLE[0][1])
+
+    # ── Determine split point: find highest message ID in source ──────────────
+    try:
+        source_entity = await client.get_entity(src)
+        newest = await client.get_messages(source_entity, limit=1)
+        if not newest:
+            raise ValueError("Source channel is empty")
+        max_msg_id = newest[0].id
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.exception("Dual copy: could not read source channel")
+        try:
+            await bot.edit_message_text(
+                f"❌ *Dual copy failed*\n\n`{str(e)[:200]}`",
+                chat_id=chat_id, message_id=status_msg_id, parse_mode="Markdown",
+            )
+        except Exception:
+            pass
+        bot_data["active_copy_task"]  = None
+        bot_data["active_status_msg"] = None
+        return
+
+    mid_id = max_msg_id // 2
+    logger.info("Dual copy: max_msg_id=%d split at mid_id=%d", max_msg_id, mid_id)
+
+    # ── Initialise per-worker stats ───────────────────────────────────────────
+    bot_data["active_copy_stats"]   = {"copied": 0, "skipped": 0, "failed": 0, "total": 0}
+    bot_data["active_copy_stats_b"] = {"copied": 0, "skipped": 0, "failed": 0, "total": 0}
+
+    try:
+        await bot.edit_message_text(
+            f"🔀 *Dual Copy initialising…*\n\n"
+            f"📡 Split point: msg ID `{mid_id:,}`\n\n"
+            f"👤 *Account A* (newer msgs): ⏳\n"
+            f"👤 *Account B* (older msgs): ⏳\n\n"
+            f"_/stopjob to cancel both_",
+            chat_id=chat_id, message_id=status_msg_id, parse_mode="Markdown",
+        )
+    except Exception:
+        pass
+
+    # Notifiers: every=0 so they only update bot_data; status loop handles edits
+    rate_delay = lambda: bot_data.get("active_copy_delay", opts.get("rate_delay", _SPEED_CYCLE[0][1]))
+
+    notifier_a = BotProgressNotifier(
+        bot, chat_id, status_msg_id,
+        every=0,
+        bot_data=bot_data,
+        stats_key="active_copy_stats",
+        flood_key="active_flood_wait",
+    )
+    notifier_b = BotProgressNotifier(
+        bot, chat_id, status_msg_id,
+        every=0,
+        bot_data=bot_data,
+        stats_key="active_copy_stats_b",
+        flood_key="active_flood_wait_b",
+    )
+
+    # ── Status-update loop: edits the message with two-row progress ───────────
+    async def _status_loop():
+        while True:
+            await asyncio.sleep(10)
+            sa = bot_data.get("active_copy_stats",   {})
+            sb = bot_data.get("active_copy_stats_b", {})
+            fa = bot_data.get("active_flood_wait")
+            fb = bot_data.get("active_flood_wait_b")
+
+            def _row(label, stats, flood):
+                co = stats.get("copied",  0)
+                sk = stats.get("skipped", 0)
+                fl_ = stats.get("failed",  0)
+                to = stats.get("total",   0)
+                tot = f"/{to:,}" if to else ""
+                fw = ""
+                if flood:
+                    rem = int(flood["until"] - time.time())
+                    if rem > 0:
+                        fm, fs_ = divmod(rem, 60)
+                        fw = f" ⏳{fm}m{fs_:02d}s" if fm else f" ⏳{rem}s"
+                return (
+                    f"👤 *{label}:* "
+                    f"✅`{co:,}`{tot} ⏭`{sk:,}` ❌`{fl_:,}`{fw}"
+                )
+
+            lines = [
+                "🔀 *Dual Copy running*\n",
+                _row("Account A (newer)", sa, fa),
+                _row("Account B (older)", sb, fb),
+                "",
+                "_/stopjob to cancel both_",
+            ]
+            try:
+                await bot.edit_message_text(
+                    "\n".join(lines),
+                    chat_id=chat_id, message_id=status_msg_id, parse_mode="Markdown",
+                )
+            except Exception:
+                pass
+
+    # ── Spin up both worker tasks ─────────────────────────────────────────────
+    async def _worker_a():
+        await copy_channel_files(
+            client, src, dst,
+            allowed_exts=opts["allowed_exts"],
+            caption_replacement=opts["caption_replacement"],
+            caption_suffix=opts.get("caption_suffix", ""),
+            notify_every=0,
+            skip_text=opts["skip_text"],
+            notifier=notifier_a,
+            interactive=False,
+            rate_delay=rate_delay,
+            min_id=mid_id,
+        )
+
+    async def _worker_b():
+        await copy_channel_files(
+            client_2, src, dst,
+            allowed_exts=opts["allowed_exts"],
+            caption_replacement=opts["caption_replacement"],
+            caption_suffix=opts.get("caption_suffix", ""),
+            notify_every=0,
+            skip_text=opts["skip_text"],
+            notifier=notifier_b,
+            interactive=False,
+            rate_delay=rate_delay,
+            max_id=mid_id + 1,
+        )
+
+    task_a      = asyncio.create_task(_worker_a())
+    task_b      = asyncio.create_task(_worker_b())
+    status_task = asyncio.create_task(_status_loop())
+
+    cancelled = False
+    try:
+        await asyncio.gather(task_a, task_b)
+
+    except asyncio.CancelledError:
+        cancelled = True
+        task_a.cancel()
+        task_b.cancel()
+        await asyncio.gather(task_a, task_b, return_exceptions=True)
+
+    except Exception as e:
+        logger.exception("Dual copy error")
+        task_a.cancel()
+        task_b.cancel()
+        await asyncio.gather(task_a, task_b, return_exceptions=True)
+
+    finally:
+        status_task.cancel()
+        await asyncio.gather(status_task, return_exceptions=True)
+
+        sa = bot_data.get("active_copy_stats",   {})
+        sb = bot_data.get("active_copy_stats_b", {})
+        ca, sa_, fa_ = sa.get("copied",0), sa.get("skipped",0), sa.get("failed",0)
+        cb, sb_, fb_ = sb.get("copied",0), sb.get("skipped",0), sb.get("failed",0)
+        tc, ts, tf = ca + cb, sa_ + sb_, fa_ + fb_
+
+        if cancelled:
+            _ar.clear_resume()
+            text = (
+                f"⛔ *Dual Copy Cancelled*\n\n"
+                f"👤 *Account A:* ✅`{ca:,}` ⏭`{sa_:,}` ❌`{fa_:,}`\n"
+                f"👤 *Account B:* ✅`{cb:,}` ⏭`{sb_:,}` ❌`{fb_:,}`\n\n"
+                f"_Use /copy to start a new job._"
+            )
+        else:
+            _ar.clear_resume()
+            tag = "✅ *Dual Copy Complete!*" if tf == 0 else "⚠️ *Dual Copy Finished (with errors)*"
+            text = (
+                f"{tag}\n\n"
+                f"👤 *Account A:* ✅`{ca:,}` ⏭`{sa_:,}` ❌`{fa_:,}`\n"
+                f"👤 *Account B:* ✅`{cb:,}` ⏭`{sb_:,}` ❌`{fb_:,}`\n\n"
+                f"*Total: ✅`{tc:,}` ⏭`{ts:,}` ❌`{tf:,}`*"
+            )
+
+        try:
+            await bot.edit_message_text(
+                text, chat_id=chat_id, message_id=status_msg_id, parse_mode="Markdown",
+            )
+        except Exception:
+            try:
+                await bot.send_message(chat_id, text, parse_mode="Markdown")
+            except Exception:
+                pass
+
+        bot_data["active_copy_task"]  = None
+        bot_data["active_status_msg"] = None
+        bot_data.pop("active_flood_wait",   None)
+        bot_data.pop("active_flood_wait_b", None)
+        bot_data.pop("active_copy_stats",   None)
+        bot_data.pop("active_copy_stats_b", None)
+        bot_data.pop("active_copy_delay",   None)
 
 
 async def _run_dryrun(client, src, dst, opts, bot, chat_id, msg_id, bot_data):
@@ -1143,13 +1378,33 @@ def _build_status_text(bot_data: dict) -> str:
             else:
                 bot_data.pop("active_flood_wait", None)
 
-        job_label = "⏸ *Copy job paused (flood wait)*" if flood_line else "▶ *Copy job running*"
-        lines.append(
-            f"\n{job_label}\n"
-            f"  ✅ Copied: `{c:,}`{total_note}  "
-            f"⏭ Skipped: `{s:,}`  ❌ Failed: `{f:,}`"
-            f"{flood_line}"
-        )
+        # Check if this is a dual-copy job (stats_b key present)
+        stats_b = bot_data.get("active_copy_stats_b")
+        if stats_b is not None:
+            cb = stats_b.get("copied",  0)
+            sb2 = stats_b.get("skipped", 0)
+            fb2 = stats_b.get("failed",  0)
+            flood_b = bot_data.get("active_flood_wait_b")
+            flood_b_line = ""
+            if flood_b:
+                rem_b = int(flood_b["until"] - time.time())
+                if rem_b > 0:
+                    fb_m, fb_s = divmod(rem_b, 60)
+                    wt_b = f"{fb_m}m {fb_s}s" if fb_m else f"{fb_s}s"
+                    flood_b_line = f"\n      ⏳ Flood wait: `{wt_b}` remaining"
+            lines.append(
+                f"\n🔀 *Dual Copy running*\n"
+                f"  👤 Account A: ✅`{c:,}`{total_note} ⏭`{s:,}` ❌`{f:,}`{flood_line}\n"
+                f"  👤 Account B: ✅`{cb:,}` ⏭`{sb2:,}` ❌`{fb2:,}`{flood_b_line}"
+            )
+        else:
+            job_label = "⏸ *Copy job paused (flood wait)*" if flood_line else "▶ *Copy job running*"
+            lines.append(
+                f"\n{job_label}\n"
+                f"  ✅ Copied: `{c:,}`{total_note}  "
+                f"⏭ Skipped: `{s:,}`  ❌ Failed: `{f:,}`"
+                f"{flood_line}"
+            )
     elif sync_hdlr:
         stats = bot_data.get("active_sync_stats", {})
         c = stats.get("copied",  0)
@@ -1223,8 +1478,9 @@ async def stopjob_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _ar.clear_resume()
         context.bot_data[_AR_CANCEL_KEY] = True   # abort any pending countdown
         task.cancel()
-        # Tell the user what we just stopped — dry runs show a different label
-        await update.message.reply_text("⛔ Stopping job…")
+        is_dual = context.bot_data.get("active_copy_stats_b") is not None
+        label = "dual copy job" if is_dual else "job"
+        await update.message.reply_text(f"⛔ Stopping {label}…")
     else:
         await update.message.reply_text(
             "No copy job is currently running.\n"
@@ -1613,10 +1869,11 @@ async def got_replace_username(update: Update, context: ContextTypes.DEFAULT_TYP
     src_raw = context.user_data.get("copy_src_raw", "?")
     dst_raw = context.user_data.get("copy_dst_raw", "?")
 
+    _dual_avail2 = context.bot_data and bridge.is_ready_2(context.bot_data)
     await update.message.reply_text(
         confirm + "\n\n" + _opts_text(src_raw, dst_raw, opts),
         parse_mode="Markdown",
-        reply_markup=_opts_keyboard(opts),
+        reply_markup=_opts_keyboard(opts, dual_available=_dual_avail2),
     )
     return COPY_OPTIONS
 
