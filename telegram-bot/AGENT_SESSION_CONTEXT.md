@@ -233,6 +233,55 @@ All 5 items from Session 5 are resolved as of Session 6. Bot is fully operationa
 
 ---
 
+## Future Feature: Persistent Destination Cache (eliminate pre-scan delay)
+
+### Problem
+Every Railway restart triggers a 5-min destination pre-scan before copying starts.
+For an 800K-file job with frequent restarts this wastes significant time.
+
+### Research findings (checked tgcf, JBDAC/TelegramDeDup, and others)
+Three approaches used by production bots:
+
+| Approach | How it works | Accuracy | Complexity |
+|---|---|---|---|
+| Source message ID tracking (tgcf) | Store processed source msg IDs in a file | ✅ Perfect | Low |
+| `document.id` cache (recommended) | Use Telegram's stable internal file ID | ✅ Perfect | Medium |
+| filename+filesize cache (simple) | Save existing set to DATA_DIR on disk | ⚠️ Name collisions | Low |
+
+### Recommended implementation: `document.id` cache
+Telegram gives every file a stable `document.id` that is **identical across all copies**
+of the same file (source and destination have the same ID). This is more reliable than
+filename+filesize (two different files can share a name).
+
+**Flow:**
+1. First `/copy` ever: pre-scan runs normally, building `{document.id}` set
+2. After pre-scan completes: save set to `DATA_DIR/dest_index.json`
+3. Every restart after that: load `dest_index.json` instead of scanning — instant
+4. As each file is copied: append its `document.id` to the cache file incrementally
+5. Add `/rescandest` command: forces a fresh scan + rebuilds cache (use if you manually
+   delete files from destination channel)
+
+### Files to touch
+- `telegram-bot/userbot/forwarder.py` — save/load cache around `_run_prescan()`,
+  append to cache after each successful send in the copy loop
+- `telegram-bot/handlers/copybot.py` — add `/rescandest` command + register it
+- `telegram-bot/bot.py` — add `/rescandest` BotCommand
+
+### Cache file format (simple, appendable)
+`DATA_DIR/dest_index.json` — a JSON list of `document.id` integers:
+`[123456789, 987654321, ...]`
+Or a newline-delimited text file (faster to append): one `document.id` per line.
+
+### Risk
+If you manually delete files from the destination channel, the cache thinks they still
+exist and the bot will skip re-copying them. Fix: run `/rescandest` to rebuild.
+
+### Benefit
+For a 32-day copy job with Railway restarting every few hours, this eliminates
+5-min pre-scan delays on every restart — resume becomes instant every time.
+
+---
+
 ## Future Feature: Permanent Session-Revocation Fix
 
 ### Root cause
