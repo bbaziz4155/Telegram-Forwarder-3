@@ -1,6 +1,8 @@
 import asyncio
+import json
 import logging
 import os
+import time
 from telegram import BotCommand, Update
 from telegram.ext import (
     Application,
@@ -104,6 +106,32 @@ async def post_init(application: Application):
 
     # Schedule auto-resume check
     asyncio.create_task(copybot_handler.schedule_auto_resume(application))
+
+    # ── Send "✅ Back online!" if this is a /restart recovery ─────────────────
+    _data_dir = os.environ.get("DATA_DIR", os.path.join(os.path.dirname(__file__), "data"))
+    _marker   = os.path.join(_data_dir, "restart_pending.json")
+    try:
+        with open(_marker) as _mf:
+            _ri = json.load(_mf)
+        os.remove(_marker)
+        _chat_id = _ri.get("chat_id")
+        _elapsed = int(time.time() - _ri.get("timestamp", 0))
+        if _chat_id and _elapsed < 300:  # only notify if within 5 min of restart
+            await application.bot.send_message(
+                _chat_id,
+                "✅ *Bot restarted successfully\!*
+
+"
+                "All systems are back online\.
+"
+                "Userbot is reconnecting — use /status in a moment to check\.",
+                parse_mode="MarkdownV2",
+            )
+            logger.info("Sent restart-success notification to chat %s", _chat_id)
+    except FileNotFoundError:
+        pass  # normal startup (not a /restart recovery)
+    except Exception as _e:
+        logger.warning("Could not send restart notification: %s", _e)
 
     # ── Register all commands in the Telegram "/" menu ────────────────────────
     await application.bot.set_my_commands([
