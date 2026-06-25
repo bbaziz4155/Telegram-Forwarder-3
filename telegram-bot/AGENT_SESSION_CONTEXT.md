@@ -36,14 +36,14 @@ telegram-bot/
 ├── handlers/
 │   ├── autoresume.py     # Auto-resume file I/O: save_resume(), clear_resume(),
 │   │                     # load_resume(), claim_resume() — uses DATA_DIR
-│   ├── copybot.py        # All copy/dryrun/sync/resume/speed/status commands (~2880 lines)
+│   ├── copybot.py        # All copy/dryrun/sync/resume/speed/status commands (~2890 lines)
 │   │                     # schedule_auto_resume() uses claim_resume() (NOT load_resume())
-│   │                     # NO channel-sync guard — see Architecture Decision #7
-│   ├── menu.py           # Main menu keyboard
+│   │                     # _auto_resume_start() does NOT override stored channels (see AD#7)
+│   ├── menu.py           # Main menu keyboard + /commands /help text
 │   ├── login.py          # /login OTP flow
 │   ├── restart.py        # /restart — owner-only graceful process restart via os.execv()
 │   ├── setchannel.py     # /setsource /setdest — clears autoresume on channel change
-│   ├── purgedups.py      # /purgedups — dedup scan+delete
+│   ├── purgedups.py      # /purgedups — dedup scan+delete (background task, /stoppurge)
 │   ├── strippatterns.py  # /strippatterns conversation
 │   ├── channelinfo.py    # /channelinfo command
 │   ├── admin_mgmt.py     # Admin allow/deny management
@@ -72,7 +72,7 @@ telegram-bot/
 | `DEST_CHANNEL` | **Default** destination channel ID (int) — only used as initial fallback. /setdest overrides it. |
 | `DATA_DIR` | **Critical** — path for all persistent files (checkpoints, resume, strip_patterns.json, channel_settings.json). Must point to a Railway Volume mount or data is lost on redeploy. |
 | `DATABASE_URL` | PostgreSQL connection string |
-| `CAPTION_REPLACE` | @username to replace in captions |
+| `CAPTION_REPLACE` | @username to replace in captions (default `""` — empty string) |
 | `CAPTION_SUFFIX` | Watermark text appended to every caption |
 | `STRIP_PATTERNS` | JSON list of regex patterns to strip from captions |
 | `ALLOWED_EXTS` | Comma-separated file extensions (blank = all) |
@@ -92,7 +92,7 @@ telegram-bot/
    next bot boot. On `/stopjob` or successful completion (`_clear_resume = True`) it is
    deleted. Railway process kills do NOT call the finally block — file always survives kills.
 
-3. **Bridge pattern**: The userbot Telethon client lives in `bot_data["_userbot_client"]`.
+3. **Bridge pattern**: The userbot Telethon client lives in `bot_data["userbot_client"]`.
    Always access it via `bridge.get_client(bot_data)` and check readiness with
    `bridge.is_ready(bot_data)` — never use raw `bot_data.get("userbot_client")` directly.
 
@@ -109,13 +109,13 @@ telegram-bot/
    the base directory, not `os.path.dirname(__file__)`. This ensures files survive redeployment
    on Railway volumes.
 
-7. **Auto-resume channel integrity — DO NOT add a channel-sync guard to `schedule_auto_resume`**.
-   The channels stored in `autoresume.json` are written by `_launch_job()` at job start and
-   are always correct. When the user changes channels via `/setsource` or `/setdest`,
-   `setchannel.py` explicitly calls `_ar.clear_resume()` which wipes the resume state.
-   A channel-sync guard that reads `config.SOURCE_CHANNEL` will corrupt the resume when
-   the `SOURCE_CHANNEL` env var (Railway) is still set to an old channel. This was a real
-   bug that caused the bot to always copy from the old source after restart.
+7. **Auto-resume channel integrity — DO NOT add a channel-sync guard to `schedule_auto_resume`
+   or `_auto_resume_start`**. The channels stored in `autoresume.json` are written by
+   `_launch_job()` at job start and are always correct. When the user changes channels via
+   `/setsource` or `/setdest`, `setchannel.py` explicitly calls `_ar.clear_resume()`.
+   `channel_settings.py` guarantees `config.SOURCE_CHANNEL` == last `/setsource` value, so
+   reading the config values in auto-resume is both redundant and dangerous if the Railway
+   env var still holds an old channel ID.
 
 8. **`claim_resume()` vs `load_resume()`**:
    - `schedule_auto_resume()` in `handlers/copybot.py` MUST use `_ar.claim_resume()`.
@@ -138,6 +138,25 @@ telegram-bot/
     then calls `os.execv(sys.executable, sys.argv)` for in-process restart. Uses `os.execv`
     (not `sys.exit`) because Railway's `restartPolicyType: ON_FAILURE` only restarts on
     non-zero exit; `os.execv` replaces the process image without exiting.
+
+11. **`purgedups.py` — background task + cooperative cancellation**:
+    `/purgedups` runs via `asyncio.create_task(_run_purgedups(...))` stored in
+    `bot_data["active_purge_task"]`. The task checks `bot_data["_purge_cancel"]` flag every
+    1000-message scan batch and every 100-message delete batch. `/stoppurge` sets the flag and
+    cancels the task. `post_shutdown` in `bot.py` also cancels `"active_purge_task"` during
+    Railway redeploys so no orphaned scans linger.
+
+12. **`bot.py` `post_shutdown` task keys** — the canonical key list that gets cancelled on
+    shutdown is: `("active_copy_task", "active_sync_task", "active_cleancaptions_task", "active_purge_task")`.
+    The old key `"active_clean_task"` (no longer used) was a bug. If you add a new background
+    task, store it under one of these keys or add a new key here.
+
+13. **Session revocation flow**:
+    - Mid-copy: health-check loop sets `bot_data["session_lost_during_copy"] = True`, cancels
+      the copy task, writes `session_revoked.flag`, alerts owner.
+    - On reconnect with a new session: `_clear_revoked_flag()` deletes the flag file, and
+      `bot_data.pop("session_lost_during_copy", None)` clears the warning — so `/status` stops
+      showing the warning once the user has fixed the session.
 
 ---
 
@@ -170,31 +189,45 @@ telegram-bot/
 | `b541a74` | `handlers/autoresume.py` | Add `claim_resume()` with atomic OS rename + stale-orphan recovery; `clear_resume()` removes both files |
 | `dc8c646` | `handlers/copybot.py` | Use `_ar.claim_resume()` in `schedule_auto_resume()` — prevents duplicate copy files |
 | `30a9640` | `handlers/autoresume.py` | `load_resume()` also checks `.running.json` so `/setsource` can detect claimed resume |
-| `308bc66` | `handlers/copybot.py` | **Remove channel-sync guard** that read `config.SOURCE_CHANNEL` (stale env var) and overwrote correct autoresume channels — was causing bot to always copy from old source after restart |
+| `308bc66` | `handlers/copybot.py` | **Remove channel-sync guard** that read `config.SOURCE_CHANNEL` and overwrote correct autoresume channels |
+
+### Session 4 (2026-06-25) — Full codebase audit (all remaining files read), 9 more bugs fixed
+
+**Round A — fixes applied from previous session transcript:**
+
+| Commit | File | Bug |
+|---|---|---|
+| (prior) | `userbot/forwarder.py` | Entity resolution failure silently returned — now raises so error surfaces to user |
+| (prior) | `handlers/copybot.py` | `_run_multi_copy` exception handler couldn't edit the frozen "⏳ Initializing…" message (used wrong variable); now edits the status message with the actual error text |
+| (prior) | `handlers/copybot.py` | `_build_status_text` used `.pop()` for `session_lost_during_copy` — warning vanished after first `/status`. Changed to `.get()` so warning persists |
+| (prior) | `config.py` | `CAPTION_REPLACE` default was hardcoded `"@BackupChannel5211"` — changed to `""` |
+| (prior) | `handlers/purgedups.py` | Entire file rewritten: scan+delete loop now runs via `asyncio.create_task(_run_purgedups(...))` so bot stays responsive; added `/stoppurge` cancel command with cooperative flag-based cancellation checked every 1000-scan / 100-delete batch |
+
+**Round B — new bugs found and fixed in this session:**
+
+| Commit | File | Bug |
+|---|---|---|
+| `608cdfa` | `bot.py` | `post_shutdown` cancelled `"active_clean_task"` (non-existent key) instead of `"active_cleancaptions_task"`; also added `"active_purge_task"` — both tasks were never cancelled on Railway redeploy |
+| `608cdfa` | `bot.py` | `/stoppurge` registered as handler but missing from `set_my_commands()` — users couldn't discover it in the Telegram `"/"` command menu |
+| `37903ab` | `handlers/copybot.py` | `_auto_resume_start` overrode stored `src`/`dst` from `autoresume.json` with `config.SOURCE_CHANNEL` / `config.DEST_CHANNEL`, contradicting the autoresume safety contract (AD#7); removed the override block |
+| `b41356b` | `handlers/menu.py` | `/stoppurge` missing from the `commands_cmd()` Maintenance section — users reading `/commands` couldn't find the cancel command |
+| `fccd7c1` | `userbot_bridge.py` | `session_lost_during_copy` flag set on revocation but never cleared on reconnect — after the `pop→get` fix it would persist forever; now cleared alongside `_revocation_alerted` when a new session connects successfully |
 
 ---
 
 ## Known Remaining Issues / Future Work
 
-### Medium priority
+### Low priority
 
-1. **`purgedups.py` — no cancellation / no background task**
-   Runs the full scan and delete loop inline. For 830K-message channels, holds the handler
-   for a very long time. Should be refactored to `asyncio.create_task` stored in
-   `bot_data["_purge_task"]` cancellable via `/stoppurge`.
+1. **`_run_copy` (auto-resume path) — confusing done message on entity error**
+   If `copy_channel_files()` raises an exception in the auto-resume path, `_run_copy` calls
+   `notifier.done(0, 0, 0, 0)` which shows "⚠️ Copy Finished (with errors)" in the status
+   message, then sends a separate `❌ Copy error: …` message. The status message is misleading
+   (shows 0/0/0 stats for what is really an error). Low impact since `notifier.done()` is
+   immediately followed by an explicit error `send_message`. Fix: call
+   `notifier.edit_progress("❌ Error: …")` instead of `notifier.done()`.
 
-2. **`_build_status_text` — destructive pop on read**
-   `bot_data.pop("session_lost_during_copy", False)` inside `_build_status_text` means the
-   "session lost" warning only shows once. If unintentional, change to `.get()`.
-
-3. **`config.py` — hardcoded channel default**
-   `SOURCE_CHANNEL = _int_env("SOURCE_CHANNEL", -1001811670072)` has the user's old channel
-   hardcoded. If `SOURCE_CHANNEL` env var is unset, it silently uses this stale default.
-   Consider removing the hardcoded default (set to `None`).
-
-### Low priority / paused
-
-4. **Dual-userbot parallel copy feature** — explicitly paused by user. Do not implement
+2. **Dual-userbot parallel copy feature** — explicitly paused by user. Do not implement
    without explicit re-authorization.
 
 ---
@@ -206,8 +239,21 @@ telegram-bot/
 
 2. The GitHub token is in the `GITHUB_PERSONAL_ACCESS_TOKEN` Replit secret.
    Push via GitHub Contents API (GET sha → patch content → PUT).
-   **For large files** (>50KB payload), write JSON to a temp file and use
-   `curl --data @/tmp/payload.json` to avoid "Argument list too long".
+   **For large files** (>~50KB, e.g. `copybot.py`), the inline base64 shell approach hits
+   "Argument list too long". Use Python's `urllib.request` instead:
+   ```python
+   import json, base64, urllib.request, os
+   with open('/tmp/fixed.py', 'rb') as f:
+       content_b64 = base64.b64encode(f.read()).decode()
+   payload = {"message": "...", "content": content_b64, "sha": "<current_sha>"}
+   req = urllib.request.Request(
+       "https://api.github.com/repos/bbaziz4155/Telegram-Forwarder-3/contents/telegram-bot/handlers/copybot.py",
+       data=json.dumps(payload).encode(), method="PUT",
+       headers={"Authorization": f"token {os.environ['GITHUB_PERSONAL_ACCESS_TOKEN']}",
+                "Accept": "application/vnd.github.v3+json", "Content-Type": "application/json"})
+   result = json.loads(urllib.request.urlopen(req).read())
+   print(result['commit']['sha'])
+   ```
 
 3. To add a new persistent file, always use:
    ```python
@@ -226,6 +272,10 @@ telegram-bot/
    `_ar.claim_resume()`. This prevents duplicate copy jobs on rapid double-restart.
 
 7. **Never add a channel-sync guard** that reads `config.SOURCE_CHANNEL` in
-   `schedule_auto_resume()`. The autoresume.json channels are always correct (set by
-   `/copy`). Channel changes clear the resume via `setchannel.py`. A guard corrupts the
-   resume when the Railway env var still has the old channel ID.
+   `schedule_auto_resume()` or `_auto_resume_start()`. The autoresume.json channels are
+   always correct. Channel changes clear the resume via `setchannel.py`.
+
+8. **When adding a new long-running background task**, store it in `bot_data` under a key
+   ending in `_task`, add cooperative cancellation (check a cancel flag every N iterations),
+   add a `/stop<name>` command, register it in `bot.py`'s `set_my_commands()` and in
+   `menu.py`'s `commands_cmd()`, and add its key to the `post_shutdown` cancellation loop.
