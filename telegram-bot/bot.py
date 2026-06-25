@@ -153,6 +153,7 @@ async def post_init(application: Application):
         BotCommand("status",         "📊 Check copy job progress"),
         BotCommand("stopjob",        "⛔ Cancel the running copy job"),
         BotCommand("skipscan",       "⏩ Skip destination pre-scan and start copying"),
+        BotCommand("dualsetup",      "⚡ How to set up dual-account parallel copy"),
         # ── Sync ──────────────────────────────────────────────────────────────
         BotCommand("sync",           "🔄 Start live auto-sync (new messages)"),
         BotCommand("stopsync",       "🔴 Stop the auto-sync"),
