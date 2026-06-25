@@ -752,7 +752,6 @@ async def _run_multi_copy(client, src, dsts, dsts_raw, opts, bot, chat_id, msg_i
             break  # stop remaining destinations
 
         except Exception as e:
-        except Exception as e:
             logger.exception("Copy error for dest %s", dst_raw)
             all_stats.append((dst_raw, {}, str(e)))
             # Edit the frozen progress message so the user sees the error clearly
@@ -912,21 +911,23 @@ async def _run_copy(client, src, dst, opts, notifier, bot, chat_id, bot_data):
     except Exception as e:
         _clear_resume = False  # crash/error — preserve resume file for auto-resume on next start
         logger.exception("Copy job error")
-        # Update the progress message so it doesn't stay frozen.
-        stats = bot_data.get("active_copy_stats", {})
+        # Edit the progress message to show the error — do NOT call notifier.done()
+        # because that shows "⚠️ Copy Finished (with errors)" which is misleading
+        # when the job actually crashed mid-run.
         try:
-            await notifier.done(
-                stats.get("copied",  0),
-                stats.get("skipped", 0),
-                stats.get("failed",  0),
-                stats.get("total",   0),
+            await bot.edit_message_text(
+                f"❌ *Copy job crashed*\n\n"
+                f"`{str(e)[:300]}`\n\n"
+                f"_The job was interrupted. Use /resume to retry, or /copy to start fresh._",
+                chat_id=chat_id,
+                message_id=notifier.message_id,
+                parse_mode="Markdown",
             )
         except Exception:
-            pass
-        try:
-            await bot.send_message(chat_id, f"❌ Copy error: {e}")
-        except Exception:
-            pass
+            try:
+                await bot.send_message(chat_id, f"❌ Copy error: {e}")
+            except Exception:
+                pass
     finally:
         # Clear resume file on success or user /stopjob cancel.
         # On unexpected exceptions we keep it so the job auto-resumes on next boot.
