@@ -300,6 +300,7 @@ async def copy_channel_files(
     rate_delay: float = RATE_DELAY,
     min_id: int = None,
     max_id: int = None,
+    prescan_skip_event: "asyncio.Event | None" = None,
 ):
     """
     Copy all messages from source → dest without "Forwarded from" tag.
@@ -362,11 +363,14 @@ async def copy_channel_files(
     dest_file_keys: set = set()
     _PRESCAN_TIMEOUT = 300  # seconds
     _info("🔍 Pre-scanning destination for existing files (prevents duplicates on redeploy)…")
-    _info("   ℹ️  Bot message will show scan progress. Use /stopjob to skip.")
+    _info("   ℹ️  Pre-scan times out automatically after 5 min — copying will start on its own.")
     async def _run_prescan():
         _fcount = 0   # files with a named attachment (what matters)
         _last_notify = 0
         async for _dm in client.iter_messages(dest_entity, reverse=False):
+            if prescan_skip_event is not None and prescan_skip_event.is_set():
+                _info("   ⏩ Pre-scan skipped by user — starting copy with files found so far.")
+                break
             _df = getattr(_dm, "file", None)
             if _df and getattr(_df, "name", None) and getattr(_df, "size", None):
                 dest_file_keys.add((_df.name, _df.size))
@@ -701,3 +705,4 @@ def _print_summary(copied, skipped, failed, flood_waits, done: bool):
     print(Fore.YELLOW + f"  Flood waits       : {flood_waits:,}" + Style.RESET_ALL)
     print(Fore.CYAN   + "="*54 + Style.RESET_ALL)
     print()
+
