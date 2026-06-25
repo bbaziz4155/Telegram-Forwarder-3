@@ -9,10 +9,16 @@ Lifecycle
                   user /stopjob cancel; does NOT run if the process is killed,
                   which is exactly when we want the file to survive.
   load_resume()   called once in schedule_auto_resume() at startup.
+  claim_resume()  atomic version of load_resume() — renames autoresume.json
+                  to autoresume.running.json so a second process starting
+                  concurrently cannot also claim the same job (prevents
+                  duplicate copies when the bot restarts more than once in
+                  quick succession).
 """
 import json
 import logging
 import os
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +26,13 @@ logger = logging.getLogger(__name__)
 # as channel_settings.json and checkpoints/ (prevents stale-channel on redeploy).
 _DATA_DIR    = os.environ.get("DATA_DIR",
                os.path.join(os.path.dirname(__file__), "..", "data"))
-_RESUME_FILE = os.path.join(_DATA_DIR, "autoresume.json")
+_RESUME_FILE  = os.path.join(_DATA_DIR, "autoresume.json")
+_RUNNING_FILE = os.path.join(_DATA_DIR, "autoresume.running.json")
+
+# A .running.json older than this is considered orphaned (the process that
+# claimed it must have crashed during the 20-second countdown before the job
+# even started).  On the next restart we recover it so the job can re-run.
+_CLAIM_TIMEOUT_SECS = 120
 
 
 def save_resume(chat_id: int, src, dst, opts: dict) -> None:
@@ -52,22 +64,90 @@ def save_resume(chat_id: int, src, dst, opts: dict) -> None:
 
 def clear_resume() -> None:
     """
-    Delete the auto-resume state.
+    Delete the auto-resume state (both autoresume.json AND autoresume.running.json).
     Called when a job ends cleanly (finish or user cancel) so it does not
     re-trigger on the next restart.
     """
+    for path in (_RESUME_FILE, _RUNNING_FILE):
+        try:
+            os.remove(path)
+            logger.info("Auto-resume state cleared (%s).", os.path.basename(path))
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            logger.warning("Auto-resume: could not clear %s: %s", os.path.basename(path), e)
+
+
+def claim_resume() -> dict | None:
+    """
+    Atomically claim the auto-resume state for this process.
+
+    Uses an OS-level atomic rename so that two bot processes starting in
+    quick succession cannot both claim the same job and start duplicate copy
+    tasks.  The first process to rename autoresume.json → autoresume.running.json
+    wins; the second process finds the file already gone and returns None.
+
+    Crash recovery: if a previous process claimed the file but crashed before
+    the job started (e.g. during the 20-second countdown), the .running.json
+    is left orphaned.  On the next startup we detect it by mtime and recover
+    it back to autoresume.json so the job can be retried.
+
+    Returns the resume dict (with opts.allowed_exts as a set), or None.
+    """
+    os.makedirs(_DATA_DIR, exist_ok=True)
+
+    # ── Step 1: recover any stale orphaned .running.json ──────────────────────
+    if os.path.exists(_RUNNING_FILE):
+        try:
+            age = time.time() - os.path.getmtime(_RUNNING_FILE)
+            if age > _CLAIM_TIMEOUT_SECS:
+                logger.info(
+                    "Auto-resume: found stale .running.json (%.0fs old) — recovering.", age
+                )
+                # Rename back; if autoresume.json also somehow exists, remove
+                # the stale running file so we don't double-up.
+                if os.path.exists(_RESUME_FILE):
+                    os.remove(_RUNNING_FILE)
+                else:
+                    os.rename(_RUNNING_FILE, _RESUME_FILE)
+        except Exception as e:
+            logger.warning("Auto-resume: could not recover .running.json: %s", e)
+
+    # ── Step 2: atomic claim ───────────────────────────────────────────────────
     try:
-        os.remove(_RESUME_FILE)
-        logger.info("Auto-resume state cleared.")
+        os.rename(_RESUME_FILE, _RUNNING_FILE)
     except FileNotFoundError:
-        pass
+        # Nothing to claim (file was never written, already claimed by
+        # another process, or explicitly cleared by a previous run).
+        return None
     except Exception as e:
-        logger.warning("Auto-resume: could not clear state: %s", e)
+        logger.warning("Auto-resume: claim failed unexpectedly: %s", e)
+        return None
+
+    # ── Step 3: read the claimed file ─────────────────────────────────────────
+    try:
+        with open(_RUNNING_FILE) as f:
+            data = json.load(f)
+        data["opts"]["allowed_exts"] = set(data["opts"].get("allowed_exts", []))
+        logger.info(
+            "Auto-resume: claimed job (src=%s, dst=%s)", data.get("src"), data.get("dst")
+        )
+        return data
+    except (json.JSONDecodeError, KeyError, TypeError) as e:
+        logger.warning("Auto-resume: malformed claimed state (%s) — discarding", e)
+        try:
+            os.remove(_RUNNING_FILE)
+        except Exception:
+            pass
+        return None
 
 
 def load_resume() -> dict | None:
     """
     Return the saved job state dict, or None if no resume is pending.
+    Use claim_resume() at startup instead — it prevents duplicate jobs when
+    the bot restarts more than once in quick succession.  load_resume() is
+    kept for callers that only need to inspect state without claiming it.
 
     Returned dict shape:
       {
