@@ -317,10 +317,12 @@ async def _start_wizard(update: Update, context: ContextTypes.DEFAULT_TYPE, mode
 
     # If config.py has both channels set, skip the input steps entirely
     if config.SOURCE_CHANNEL and config.DEST_CHANNEL:
-        context.user_data["copy_src"]     = config.SOURCE_CHANNEL
-        context.user_data["copy_src_raw"] = str(config.SOURCE_CHANNEL)
-        context.user_data["copy_dst"]     = config.DEST_CHANNEL
-        context.user_data["copy_dst_raw"] = str(config.DEST_CHANNEL)
+        context.user_data["copy_src"]      = config.SOURCE_CHANNEL
+        context.user_data["copy_src_raw"]  = str(config.SOURCE_CHANNEL)
+        context.user_data["copy_dst"]      = config.DEST_CHANNEL
+        context.user_data["copy_dst_raw"]  = str(config.DEST_CHANNEL)
+        context.user_data["copy_dsts"]     = [config.DEST_CHANNEL]
+        context.user_data["copy_dsts_raw"] = [str(config.DEST_CHANNEL)]
         opts = context.user_data["copy_opts"]
         mode_labels = {"copy": "Copy Files", "dryrun": "Dry Run", "sync": "Auto-Sync"}
         msg = await update.message.reply_text(
@@ -354,11 +356,21 @@ async def got_source(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     context.user_data["copy_src"]     = _parse_id(text)
     context.user_data["copy_src_raw"] = text
-    await update.message.reply_text(
-        "📥 Enter the *destination* channel ID or @username:\n"
-        "_(e.g. `-1003563437550`)_",
-        parse_mode="Markdown",
-    )
+    mode = context.user_data.get("copy_mode", "copy")
+    if mode == "sync":
+        await update.message.reply_text(
+            "📥 Enter the *destination* channel ID or @username:\n"
+            "_(e.g. `-1003563437550`)_",
+            parse_mode="Markdown",
+        )
+    else:
+        await update.message.reply_text(
+            "📥 Enter the *destination* channel ID or @username:\n"
+            "_(e.g. `-1003563437550`)_\n\n"
+            "💡 *Multiple destinations?* Separate IDs with commas:\n"
+            "_(e.g. `-1001234567890, -1009876543210, -1005555555555`)_",
+            parse_mode="Markdown",
+        )
     return COPY_AWAIT_DST
 
 
@@ -366,8 +378,16 @@ async def got_source(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def got_dest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
-    context.user_data["copy_dst"]     = _parse_id(text)
-    context.user_data["copy_dst_raw"] = text
+
+    # Parse comma-separated destinations (single dest still works fine)
+    raw_parts = [p.strip() for p in text.split(",") if p.strip()]
+    dsts      = [_parse_id(p) for p in raw_parts]
+
+    context.user_data["copy_dsts"]     = dsts
+    context.user_data["copy_dsts_raw"] = raw_parts
+    # Keep legacy single keys pointing at the first dest for backward compat
+    context.user_data["copy_dst"]     = dsts[0]
+    context.user_data["copy_dst_raw"] = ", ".join(raw_parts)
 
     opts    = context.user_data["copy_opts"]
     src_raw = context.user_data["copy_src_raw"]
@@ -459,52 +479,283 @@ async def _launch_job(query, context: ContextTypes.DEFAULT_TYPE, opts: dict, src
     bot     = context.application.bot
     client  = bridge.get_client(context.bot_data)
     src     = context.user_data["copy_src"]
-    dst     = context.user_data["copy_dst"]
+    dst     = context.user_data["copy_dst"]   # first / only dest
+
+    # Multi-destination list (falls back to single-dest for legacy paths)
+    dsts     = context.user_data.get("copy_dsts",     [dst])
+    dsts_raw = context.user_data.get("copy_dsts_raw", [context.user_data.get("copy_dst_raw", dst_raw)])
 
     mode_tags = {"copy": "▶ Copy", "dryrun": "🔍 Dry Run", "sync": "🔄 Auto-Sync"}
-    await query.edit_message_text(
-        f"{mode_tags[mode]} started!\n\n"
-        f"📡 `{src_raw}` → `{dst_raw}`\n"
-        f"_Progress updates will appear below…_",
-        parse_mode="Markdown",
-    )
+
+    if mode == "sync":
+        # Sync only supports a single destination (event-handler based)
+        if len(dsts) > 1:
+            await query.edit_message_text(
+                "⚠️ *Auto-Sync supports only one destination.*\n\n"
+                "Please use /sync again and enter a single channel ID.",
+                parse_mode="Markdown",
+            )
+            return
+        await query.edit_message_text(
+            f"🔄 Auto-Sync started!\n\n"
+            f"📡 `{src_raw}` → `{dst_raw}`\n"
+            f"_Forwarding new messages instantly…_",
+            parse_mode="Markdown",
+        )
+        task = asyncio.create_task(
+            _run_sync(client, src, dst, opts, bot, chat_id, context.bot_data)
+        )
+        context.bot_data["active_sync_task"] = task
+        context.bot_data["active_sync_opts"] = opts
+        context.bot_data["active_sync_src"]  = src
+        context.bot_data["active_sync_dst"]  = dst
+        return
+
+    # ── Copy / Dry-run — supports multiple destinations ───────────────────────
+    n = len(dsts)
+    if n == 1:
+        header = (
+            f"{mode_tags[mode]} started!\n\n"
+            f"📡 `{src_raw}` → `{dst_raw}`\n"
+            f"_Progress updates will appear below…_"
+        )
+    else:
+        dest_lines = "\n".join(f"  {i+1}. `{r}`" for i, r in enumerate(dsts_raw))
+        header = (
+            f"{mode_tags[mode]} started — *{n} destinations*\n\n"
+            f"📡 `{src_raw}` →\n{dest_lines}\n\n"
+            f"_Running destinations one by one…_"
+        )
+    await query.edit_message_text(header, parse_mode="Markdown")
 
     if mode == "dryrun":
         status_msg = await bot.send_message(chat_id, "⏳ Scanning channel…")
         task = asyncio.create_task(
-            _run_dryrun(client, src, dst, opts, bot, chat_id, status_msg.message_id,
-                        context.bot_data)
+            _run_multi_dryrun(client, src, dsts, dsts_raw, opts, bot, chat_id,
+                              status_msg.message_id, context.bot_data)
         )
         context.bot_data["active_copy_task"] = task
 
     elif mode == "copy":
         status_msg = await bot.send_message(chat_id, "⏳ Initializing copy…")
-        notifier   = BotProgressNotifier(
-            bot, chat_id, status_msg.message_id,
-            every=opts["notify_every"],
-            bot_data=context.bot_data,
-        )
-        # Persist job to disk BEFORE creating the task so a crash mid-start still saves state
-        # Inject user-configured caption suffix (set via /setcaption)
         opts["caption_suffix"] = context.user_data.get("caption_suffix", config.CAPTION_SUFFIX)
-        _ar.save_resume(chat_id, src, dst, opts)
+        _ar.save_resume(chat_id, src, dsts[0], opts)
         task = asyncio.create_task(
-            _run_copy(client, src, dst, opts, notifier, bot, chat_id, context.bot_data)
+            _run_multi_copy(client, src, dsts, dsts_raw, opts, bot, chat_id,
+                            status_msg.message_id, context.bot_data)
         )
-        context.bot_data["active_copy_task"]   = task
-        context.bot_data["active_status_msg"]  = (chat_id, status_msg.message_id)
-
-    elif mode == "sync":
-        task = asyncio.create_task(
-            _run_sync(client, src, dst, opts, bot, chat_id, context.bot_data)
-        )
-        context.bot_data["active_sync_task"] = task
-        context.bot_data["active_sync_opts"] = opts   # read by /synctest
-        context.bot_data["active_sync_src"]  = src    # read by /synctest
-        context.bot_data["active_sync_dst"]  = dst    # read by /synctest
+        context.bot_data["active_copy_task"]  = task
+        context.bot_data["active_status_msg"] = (chat_id, status_msg.message_id)
 
 
 # ── Background coroutines ─────────────────────────────────────────────────────
+
+
+# ── Multi-destination dry-run ──────────────────────────────────────────────────
+
+async def _run_multi_dryrun(client, src, dsts, dsts_raw, opts, bot, chat_id, msg_id, bot_data):
+    """Run dry-run sequentially for each destination and report combined results."""
+    try:
+        all_results = []
+        total = len(dsts)
+        for i, (dst, dst_raw) in enumerate(zip(dsts, dsts_raw)):
+            prefix = f"({i + 1}/{total}) " if total > 1 else ""
+            try:
+                await bot.edit_message_text(
+                    f"⏳ {prefix}Scanning → `{dst_raw}`…",
+                    chat_id=chat_id, message_id=msg_id,
+                )
+            except Exception:
+                pass
+            result = await dry_run_results(
+                client, src, dst,
+                allowed_exts=opts["allowed_exts"],
+                caption_replacement=opts["caption_replacement"],
+                skip_text=opts["skip_text"],
+            )
+            all_results.append((dst_raw, result))
+
+        filt_note = f"\n🔎 Filter: `{opts['filter_label'].upper()}` only" if opts["allowed_exts"] else ""
+        skip_note = "\n🚫 Text-only messages: *SKIPPED*" if opts["skip_text"] else ""
+
+        if total == 1:
+            dst_raw, result = all_results[0]
+            if result is None:
+                text = "❌ Could not resolve channels. Check the IDs and try again."
+            else:
+                text = (
+                    f"🔍 *Dry Run Results*{filt_note}{skip_note}\n\n"
+                    f"📡 `{result['source_name']}`\n"
+                    f"📥 `{result['dest_name']}`\n\n"
+                    f"📎 Single media : `{result['media']:,}`\n"
+                    f"🖼 Albums       : `{result['albums']:,}`\n"
+                    f"💬 Text msgs    : `{result['text']:,}`\n"
+                    f"⏭ Filtered out : `{result['filtered']:,}`\n"
+                    f"🗑 Empty/svc    : `{result['empty']:,}`\n\n"
+                    f"*✅ Would copy: `{result['total_to_copy']:,}`* of `{result['total_scanned']:,}` scanned"
+                )
+        else:
+            lines = [f"🔍 *Dry Run — {total} Destinations*{filt_note}{skip_note}\n"]
+            grand_total = 0
+            for i, (dst_raw, result) in enumerate(all_results):
+                if result is None:
+                    lines.append(f"{i + 1}\. `{dst_raw}` — ❌ Could not resolve")
+                else:
+                    tc = result["total_to_copy"]
+                    ts = result["total_scanned"]
+                    lines.append(
+                        f"{i + 1}\. `{result['dest_name']}`\n"
+                        f"   Would copy: `{tc:,}` / `{ts:,}` scanned"
+                    )
+                    grand_total += tc
+            lines.append(f"\n*✅ Grand total: `{grand_total:,}` files would be copied*")
+            text = "\n".join(lines)
+
+        await bot.edit_message_text(
+            text, chat_id=chat_id, message_id=msg_id, parse_mode="Markdown"
+        )
+
+    except asyncio.CancelledError:
+        try:
+            await bot.edit_message_text("⛔ Dry run cancelled.", chat_id=chat_id, message_id=msg_id)
+        except Exception:
+            pass
+    except Exception as e:
+        logger.exception("Multi dry-run error")
+        try:
+            await bot.edit_message_text(f"❌ Error: {e}", chat_id=chat_id, message_id=msg_id)
+        except Exception:
+            await bot.send_message(chat_id, f"❌ Dry run error: {e}")
+    finally:
+        bot_data["active_copy_task"] = None
+
+
+# ── Multi-destination copy ─────────────────────────────────────────────────────
+
+async def _run_multi_copy(client, src, dsts, dsts_raw, opts, bot, chat_id, msg_id, bot_data):
+    """Copy from one source to multiple destinations sequentially."""
+    bot_data["active_copy_delay"] = opts.get("rate_delay", _SPEED_CYCLE[0][1])
+    total       = len(dsts)
+    all_stats   = []   # list of (dst_raw, stats_dict, error_str_or_None)
+    cancelled   = False
+
+    for i, (dst, dst_raw) in enumerate(zip(dsts, dsts_raw)):
+        prefix = f"({i + 1}/{total}) " if total > 1 else ""
+
+        # For 2+ destinations, send a fresh status message per destination
+        if total > 1:
+            try:
+                await bot.edit_message_text(
+                    f"📦 {prefix}Starting copy → `{dst_raw}`…",
+                    chat_id=chat_id, message_id=msg_id,
+                )
+            except Exception:
+                pass
+            prog_msg  = await bot.send_message(chat_id, f"⏳ {prefix}Initialising…")
+            notifier  = BotProgressNotifier(
+                bot, chat_id, prog_msg.message_id,
+                every=opts["notify_every"],
+                bot_data=bot_data,
+            )
+        else:
+            notifier = BotProgressNotifier(
+                bot, chat_id, msg_id,
+                every=opts["notify_every"],
+                bot_data=bot_data,
+            )
+
+        try:
+            await copy_channel_files(
+                client, src, dst,
+                allowed_exts=opts["allowed_exts"],
+                caption_replacement=opts["caption_replacement"],
+                caption_suffix=opts.get("caption_suffix", ""),
+                notify_every=opts["notify_every"],
+                skip_text=opts["skip_text"],
+                notifier=notifier,
+                interactive=False,
+                rate_delay=lambda: bot_data.get(
+                    "active_copy_delay", opts.get("rate_delay", _SPEED_CYCLE[0][1])
+                ),
+            )
+            job_stats = bot_data.get("active_copy_stats", {})
+            all_stats.append((dst_raw, job_stats.copy(), None))
+
+        except asyncio.CancelledError:
+            cancelled   = True
+            job_stats   = bot_data.get("active_copy_stats", {})
+            c = job_stats.get("copied",  0)
+            s = job_stats.get("skipped", 0)
+            f = job_stats.get("failed",  0)
+            cancel_text = (
+                f"⛔ *Copy Cancelled* {prefix}\n\n"
+                f"✅ Copied: `{c:,}`  ⏭ Skipped: `{s:,}`  ❌ Failed: `{f:,}`\n\n"
+                f"_Use /resume to continue from this point._"
+            )
+            try:
+                await bot.edit_message_text(
+                    cancel_text,
+                    chat_id=chat_id,
+                    message_id=notifier.message_id,
+                    parse_mode="Markdown",
+                )
+            except Exception:
+                try:
+                    await bot.send_message(chat_id, cancel_text, parse_mode="Markdown")
+                except Exception:
+                    pass
+            break  # stop remaining destinations
+
+        except Exception as e:
+            logger.exception("Copy error for dest %s", dst_raw)
+            all_stats.append((dst_raw, {}, str(e)))
+            try:
+                await bot.send_message(
+                    chat_id,
+                    f"❌ Copy to `{dst_raw}` failed: {e}\n_Continuing with next destination…_",
+                    parse_mode="Markdown",
+                )
+            except Exception:
+                pass
+            # Continue with next destination — don't break
+
+    # ── Summary for multi-destination jobs ─────────────────────────────────────
+    if total > 1 and all_stats and not cancelled:
+        lines = ["📊 *Multi-Destination Copy Complete!*\n"]
+        grand_copied = grand_skipped = grand_failed = 0
+        for dst_raw, stats, err in all_stats:
+            c = stats.get("copied",  0)
+            s = stats.get("skipped", 0)
+            f = stats.get("failed",  0)
+            grand_copied  += c
+            grand_skipped += s
+            grand_failed  += f
+            status_icon = "❌" if err else "✅"
+            if err:
+                lines.append(f"{status_icon} `{dst_raw[:40]}` — Error: _{err[:60]}_")
+            else:
+                lines.append(
+                    f"{status_icon} `{dst_raw[:40]}`\n"
+                    f"   ✅ {c:,} copied · ⏭ {s:,} skipped · ❌ {f:,} failed"
+                )
+        lines.append(
+            f"\n*Grand total: ✅ {grand_copied:,} copied · "
+            f"⏭ {grand_skipped:,} skipped · ❌ {grand_failed:,} failed*"
+        )
+        try:
+            await bot.send_message(chat_id, "\n".join(lines), parse_mode="Markdown")
+        except Exception:
+            pass
+
+    # ── Cleanup ────────────────────────────────────────────────────────────────
+    if not cancelled:
+        _ar.clear_resume()
+    bot_data["active_copy_task"]  = None
+    bot_data["active_status_msg"] = None
+    bot_data.pop("active_flood_wait", None)
+    bot_data.pop("active_copy_stats", None)
+    bot_data.pop("active_copy_delay", None)
+
 
 async def _run_dryrun(client, src, dst, opts, bot, chat_id, msg_id, bot_data):
     try:
