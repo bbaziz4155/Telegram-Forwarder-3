@@ -448,11 +448,10 @@ async def got_dest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     src_raw = context.user_data["copy_src_raw"]
     dst_raw = context.user_data["copy_dst_raw"]
 
-    _dual_avail = bridge.is_ready_2(context.bot_data)
     msg = await update.message.reply_text(
         _opts_text(src_raw, dst_raw, opts),
         parse_mode="Markdown",
-        reply_markup=_opts_keyboard(opts, dual_available=_dual_avail),
+        reply_markup=_opts_keyboard(opts),
     )
     context.user_data["opts_msg_id"] = msg.message_id
     return COPY_OPTIONS
@@ -986,7 +985,6 @@ async def _run_dual_copy(client, client_2, src, dst, opts, bot, chat_id, status_
     status_task = asyncio.create_task(_status_loop())
 
     cancelled = False
-    errored   = False
     try:
         await asyncio.gather(task_a, task_b)
 
@@ -997,8 +995,7 @@ async def _run_dual_copy(client, client_2, src, dst, opts, bot, chat_id, status_
         await asyncio.gather(task_a, task_b, return_exceptions=True)
 
     except Exception as e:
-        errored = True
-        logger.exception("Dual copy error: %s", e)
+        logger.exception("Dual copy error")
         task_a.cancel()
         task_b.cancel()
         await asyncio.gather(task_a, task_b, return_exceptions=True)
@@ -1020,15 +1017,6 @@ async def _run_dual_copy(client, client_2, src, dst, opts, bot, chat_id, status_
                 f"👤 *Account A:* ✅`{ca:,}` ⏭`{sa_:,}` ❌`{fa_:,}`\n"
                 f"👤 *Account B:* ✅`{cb:,}` ⏭`{sb_:,}` ❌`{fb_:,}`\n\n"
                 f"_Use /copy to start a new job._"
-            )
-        elif errored:
-            _ar.clear_resume()
-            tag = "❌ *Dual Copy Failed (internal error)*"
-            text = (
-                f"{tag}\n\n"
-                f"👤 *Account A:* ✅`{ca:,}` ⏭`{sa_:,}` ❌`{fa_:,}`\n"
-                f"👤 *Account B:* ✅`{cb:,}` ⏭`{sb_:,}` ❌`{fb_:,}`\n\n"
-                f"_Check logs for details. Use /copy to start a new job._"
             )
         else:
             _ar.clear_resume()
@@ -2322,6 +2310,7 @@ async def copystats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 _AR_CANCEL_KEY = "ar_cancel_pending"
 _AR_COUNTDOWN  = 20   # seconds the user has to cancel before the job starts
+_AR_MISMATCH_KEY = "ar_mismatch_resume"  # bot_data key holding a pending mismatch resume
 
 _AR_CANCEL_KB = InlineKeyboardMarkup([
     [InlineKeyboardButton("❌ Cancel Auto-Resume", callback_data="ar_cancel")],
@@ -2343,6 +2332,65 @@ async def ar_cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
     except Exception:
         pass
+
+
+async def ar_resume_saved_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Mismatch alert — user chose to resume using the *saved* channels anyway."""
+    query  = update.callback_query
+    await query.answer("▶️ Resuming with saved channels…")
+    resume = context.bot_data.pop(_AR_MISMATCH_KEY, None)
+    if not resume:
+        try:
+            await query.edit_message_text(
+                "⚠️ *Resume data expired.*\n\n"
+                "The checkpoint is no longer available. Use /copy to start a new job.",
+                parse_mode="Markdown",
+            )
+        except Exception:
+            pass
+        return
+    src = resume.get("src")
+    dst = resume.get("dst")
+    try:
+        await query.edit_message_text(
+            f"▶️ *Resuming with saved channels*\n\n"
+            f"📡 `{src}` → `{dst}`\n\n"
+            f"Starting in {_AR_COUNTDOWN} seconds — use /stopjob to cancel.",
+            parse_mode="Markdown",
+        )
+    except Exception:
+        pass
+    asyncio.create_task(
+        _ar_launch_from_mismatch(update.effective_chat.id, resume, context.application)
+    )
+
+
+async def ar_cancel_saved_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Mismatch alert — user chose to cancel and discard the checkpoint."""
+    query = update.callback_query
+    await query.answer("Checkpoint cleared.")
+    context.bot_data.pop(_AR_MISMATCH_KEY, None)
+    try:
+        await query.edit_message_text(
+            "❌ *Auto-resume cancelled.*\n\n"
+            "The checkpoint has been deleted. Use /copy to start a new job.",
+            parse_mode="Markdown",
+        )
+    except Exception:
+        pass
+
+
+async def _ar_launch_from_mismatch(chat_id: int, resume: dict, application) -> None:
+    """Launch a resumed job straight from the mismatch-override flow (skips guard)."""
+    loop     = asyncio.get_running_loop()
+    deadline = loop.time() + 90
+    while not bridge.is_ready(application.bot_data):
+        if loop.time() > deadline:
+            logger.warning("Auto-resume (mismatch override): timed out waiting for userbot.")
+            return
+        await asyncio.sleep(2)
+    application.bot_data[_AR_CANCEL_KEY] = False
+    await _auto_resume_start(application, resume, None)
 
 
 async def _auto_resume_start(application, resume: dict, countdown_msg_id: int | None) -> None:
@@ -2421,28 +2469,36 @@ async def schedule_auto_resume(application) -> None:
     dst     = resume.get("dst")
 
     # ── Channel mismatch guard ─────────────────────────────────────────────────
-    # If the user ran /setsource or /setdest since the job was saved, the stored
-    # channels will differ from the current config.  Resuming silently with stale
-    # channels would copy to/from the wrong place — abort and notify instead.
+    # Only compare against configured (non-zero) values.  DEST_CHANNEL defaults
+    # to 0 when the user has never run /setdest — comparing that against a real
+    # saved dst would always trigger a false mismatch.
     _cfg_src = config.SOURCE_CHANNEL
     _cfg_dst = config.DEST_CHANNEL
-    if src != _cfg_src or dst != _cfg_dst:
+    src_mismatch = bool(_cfg_src) and src != _cfg_src
+    dst_mismatch = bool(_cfg_dst) and dst != _cfg_dst
+    if src_mismatch or dst_mismatch:
         logger.warning(
             "Auto-resume: channel mismatch — saved (src=%s dst=%s) vs config (src=%s dst=%s). "
-            "Cancelling to prevent wrong-channel copy.",
+            "Asking user whether to resume with saved channels.",
             src, dst, _cfg_src, _cfg_dst,
         )
-        _ar.clear_resume()
+        # Capture in bot_data so the user can still launch with saved channels.
+        application.bot_data[_AR_MISMATCH_KEY] = resume
+        _ar.clear_resume()   # remove from disk; data is now in bot_data
+        _mm_kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("↩️ Resume with saved channels", callback_data="ar_resume_saved"),
+            InlineKeyboardButton("🚫 Cancel",                      callback_data="ar_cancel_saved"),
+        ]])
         try:
             await application.bot.send_message(
                 chat_id,
-                f"⚠️ *Auto-Resume Cancelled*\n\n"
+                f"⚠️ *Auto-Resume: Channel Mismatch*\n\n"
                 f"The saved job used *different channels* than your current settings:\n\n"
-                f"💾 Saved job:  `{src}` → `{dst}`\n"
-                f"⚙️ Current:    `{_cfg_src}` → `{_cfg_dst}`\n\n"
-                f"Auto-resume was stopped to prevent copying to/from the wrong channel.\n\n"
-                f"Use /copy to start a fresh job with your current channels.",
+                f"💾 *Saved:*   `{src}` → `{dst}`\n"
+                f"⚙️ *Current:* `{_cfg_src or 'not set'}` → `{_cfg_dst or 'not set'}`\n\n"
+                f"What would you like to do?",
                 parse_mode="Markdown",
+                reply_markup=_mm_kb,
             )
         except Exception as _me:
             logger.warning("Auto-resume: could not send mismatch notice: %s", _me)
@@ -3201,5 +3257,7 @@ def get_extra_handlers() -> list:
         CallbackQueryHandler(listchats_callback,    pattern="^listchats_menu$"),
         CallbackQueryHandler(clearhistory_callback, pattern="^clrhist"),
         CallbackQueryHandler(speed_callback,        pattern=f"^{_SPEED_CB}"),
-        CallbackQueryHandler(ar_cancel_callback,    pattern="^ar_cancel$"),
+        CallbackQueryHandler(ar_cancel_callback,        pattern="^ar_cancel$"),
+        CallbackQueryHandler(ar_resume_saved_callback,  pattern="^ar_resume_saved$"),
+        CallbackQueryHandler(ar_cancel_saved_callback,  pattern="^ar_cancel_saved$"),
     ]
