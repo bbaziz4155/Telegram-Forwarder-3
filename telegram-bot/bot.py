@@ -149,9 +149,6 @@ async def post_init(application: Application):
 
 
 def build_app(token: str) -> Application:
-    # Honour DATA_DIR env var so a Railway Volume (or any persistent mount)
-    # can be used for all bot state without changing code.
-    # Railway: set DATA_DIR=/data in Variables, then add a Volume at /data.
     _data_dir = os.environ.get(
         "DATA_DIR", os.path.join(os.path.dirname(__file__), "data")
     )
@@ -179,11 +176,19 @@ def build_app(token: str) -> Application:
     # ── Strip-pattern management conversation ─────────────────────────────────
     strippatterns_conv = strippatterns_handler.build_strippatterns_conv()
 
-    # ── Main menu conversation handler ───────────────────────────────────────
+    # ── Shared callback handlers (work from ANY conversation state) ───────────
+    # These are also duplicated inside MAIN_MENU states and fallbacks below,
+    # but registering them globally ensures they fire even if the user is
+    # mid-wizard in a different conversation (e.g. after admin mgmt finishes).
+    _help_cb     = CallbackQueryHandler(menu_handler.help_cmd,     pattern="^help$")
+    _commands_cb = CallbackQueryHandler(menu_handler.commands_cmd, pattern="^commands$")
+    _menu_cb     = CallbackQueryHandler(menu_handler.menu,         pattern="^menu$")
+
+    # ── Main menu conversation handler ────────────────────────────────────────
     conv = ConversationHandler(
         entry_points=[
             CommandHandler("start", menu_handler.start),
-            CommandHandler("menu", menu_handler.start),
+            CommandHandler("menu",  menu_handler.start),
         ],
         allow_reentry=True,
         states={
@@ -197,6 +202,7 @@ def build_app(token: str) -> Application:
                 CallbackQueryHandler(ignore_handler.ignore_remove_start,   pattern="^ignore_remove$"),
                 CallbackQueryHandler(menu_handler.menu,                    pattern="^menu$"),
                 CallbackQueryHandler(menu_handler.help_cmd,                pattern="^help$"),
+                CallbackQueryHandler(menu_handler.commands_cmd,            pattern="^commands$"),
                 CallbackQueryHandler(copybot_handler.status_callback,      pattern="^status_menu$"),
                 CallbackQueryHandler(copybot_handler.listchats_callback,   pattern="^listchats_menu$"),
                 CallbackQueryHandler(ignore_handler.ignore_remove_select,  pattern=r"^rm_ignore_\d+$"),
@@ -233,9 +239,15 @@ def build_app(token: str) -> Application:
                 MessageHandler(filters.TEXT & ~filters.COMMAND, history_handler.history_limit),
             ],
         },
+        # Fallbacks fire in ANY state when no state handler matched — this is
+        # how Help and Commands work after admin/copy/login wizards finish.
         fallbacks=[
-            CommandHandler("cancel", rules_handler.cancel),
-            CommandHandler("start",  menu_handler.start),
+            CommandHandler("cancel",  rules_handler.cancel),
+            CommandHandler("start",   menu_handler.start),
+            CommandHandler("menu",    menu_handler.start),
+            CallbackQueryHandler(menu_handler.help_cmd,     pattern="^help$"),
+            CallbackQueryHandler(menu_handler.commands_cmd, pattern="^commands$"),
+            CallbackQueryHandler(menu_handler.menu,         pattern="^menu$"),
         ],
         per_chat=False,
         per_user=True,
@@ -254,6 +266,13 @@ def build_app(token: str) -> Application:
     app.add_handler(admin_conv)
     app.add_handler(strippatterns_conv)
     app.add_handler(conv)
+
+    # Global fallbacks for help/commands/menu — catches cases where the user
+    # has an old message with buttons but is no longer in any conversation.
+    app.add_handler(_help_cb)
+    app.add_handler(_commands_cb)
+    app.add_handler(_menu_cb)
+
     app.add_handler(CommandHandler("help", menu_handler.help_cmd))
 
     for h in copybot_handler.get_extra_handlers():
