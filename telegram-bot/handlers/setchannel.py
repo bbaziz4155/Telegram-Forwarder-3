@@ -12,6 +12,7 @@ from telegram.ext import CommandHandler, ContextTypes
 
 import channel_settings
 import config
+from handlers import autoresume as _ar
 
 logger = logging.getLogger(__name__)
 
@@ -55,11 +56,26 @@ async def setsource_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     config.SOURCE_CHANNEL = new_id
     channel_settings.save()
 
+    # Clear any saved auto-resume checkpoint — its source offset belongs to
+    # the old channel and would override this new setting on the next restart.
+    resume_note = ""
+    pending = _ar.load_resume()
+    if pending:
+        old_src = pending.get("src", "?")
+        _ar.clear_resume()
+        resume_note = (
+            f"\n\n⚠️ *Auto-resume checkpoint cleared.*\n"
+            f"It was pointing at old source `{old_src}` and would have "
+            f"overridden your new channel on the next restart.\n"
+            f"Use /copy to start a fresh job."
+        )
+
     name = await _resolve_name(context.bot, new_id)
     await update.message.reply_text(
         f"✅ *Source channel updated!*\n\n"
         f"📡 `{name}` (`{new_id}`)\n\n"
-        f"All future /copy, /dryrun and /sync jobs will use this as the default source.",
+        f"All future /copy, /dryrun and /sync jobs will use this as the default source."
+        f"{resume_note}",
         parse_mode="Markdown",
     )
 
@@ -95,11 +111,26 @@ async def setdest_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     config.DEST_CHANNEL = new_id
     channel_settings.save()
 
+    # Clear any saved auto-resume checkpoint — its destination is now stale
+    # and would send files to the old channel on the next restart.
+    resume_note = ""
+    pending = _ar.load_resume()
+    if pending:
+        old_dst = pending.get("dst", "?")
+        _ar.clear_resume()
+        resume_note = (
+            f"\n\n⚠️ *Auto-resume checkpoint cleared.*\n"
+            f"It was pointing at old destination `{old_dst}` and would have "
+            f"sent files to the wrong channel on the next restart.\n"
+            f"Use /copy to start a fresh job."
+        )
+
     name = await _resolve_name(context.bot, new_id)
     await update.message.reply_text(
         f"✅ *Destination channel updated!*\n\n"
         f"📥 `{name}` (`{new_id}`)\n\n"
-        f"All future /copy, /dryrun and /sync jobs will send files here by default.",
+        f"All future /copy, /dryrun and /sync jobs will send files here by default."
+        f"{resume_note}",
         parse_mode="Markdown",
     )
 
