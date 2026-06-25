@@ -523,7 +523,7 @@ async def copy_channel_files(
             source_entity,
             limit=limit,
             min_id=resume_from,
-            max_id=max_id,
+            max_id=max_id if max_id is not None else 0,
             reverse=True,
             **_iter_extra,
         ):
