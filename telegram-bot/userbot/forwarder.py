@@ -315,7 +315,7 @@ async def copy_channel_files(
     except Exception as e:
         _err(f"❌  Could not resolve chat: {e}")
         _info("Tip: For private channels use the full numeric ID e.g. -1001234567890")
-        return
+        raise  # propagate so the bot handler can report the error to the user
 
     source_id   = _entity_id(source_entity)
     dest_id     = _entity_id(dest_entity)
