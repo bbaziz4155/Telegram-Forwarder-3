@@ -32,13 +32,15 @@ telegram-bot/
 ├── states.py             # ConversationHandler state constants
 ├── userbot_bridge.py     # get_client(), is_ready(), is_locked() — the bridge API
 ├── channel_settings.py   # Per-channel settings (rate delay, ext filter) persisted to JSON
-├── autoresume.py         # Load/save/clear resume state — uses DATA_DIR
 │
 ├── handlers/
+│   ├── autoresume.py     # Auto-resume file I/O: save_resume(), clear_resume(),
+│   │                     # load_resume(), claim_resume() — uses DATA_DIR
 │   ├── copybot.py        # All copy/dryrun/sync/resume/speed/status commands (~2900 lines)
-│   ├── autoresume.py     # Auto-resume-on-boot logic
+│   │                     # schedule_auto_resume() uses claim_resume() (NOT load_resume())
 │   ├── menu.py           # Main menu keyboard
 │   ├── login.py          # /login OTP flow
+│   ├── restart.py        # /restart — owner-only graceful process restart via os.execv()
 │   ├── setchannel.py     # /setsrc /setdst commands
 │   ├── purgedups.py      # /purgedups — dedup scan+delete
 │   ├── strippatterns.py  # /strippatterns conversation
@@ -106,6 +108,26 @@ telegram-bot/
    the base directory, not `os.path.dirname(__file__)`. This ensures files survive redeployment
    on Railway volumes.
 
+7. **`claim_resume()` vs `load_resume()`**: `schedule_auto_resume()` in `handlers/copybot.py`
+   MUST use `_ar.claim_resume()` (NOT `_ar.load_resume()`). `claim_resume()` atomically
+   renames `autoresume.json` → `autoresume.running.json` so a second process starting
+   concurrently cannot also claim the same job. Using `load_resume()` caused duplicate copy
+   jobs when the bot restarted more than once in quick succession (both processes would read
+   the same file and launch separate copy tasks).
+
+8. **Dedup layers** in `copy_channel_files()`:
+   - **Layer 1 — Destination pre-scan**: Scans actual destination channel by `(filename, filesize)`
+     into `dest_file_keys`. Runs ONCE at job start. Prevents re-sending files already there.
+   - **Layer 2 — SQLite dedup**: `load_copied_ids()` returns source msg IDs + doc IDs from DB.
+     Persists across restarts and redeploys.
+   - **Layer 3 — Checkpoint watermark**: `last_msg_id` in checkpoint means all source msgs up
+     to this ID were already processed — they are skipped via `min_id=last_msg_id` in iter_messages.
+
+9. **`/restart` command** (new): Owner-only. Cancels active jobs, disconnects Telethon cleanly,
+   then calls `os.execv(sys.executable, sys.argv)` for in-process restart. Uses `os.execv`
+   (not `sys.exit`) because Railway's `restartPolicyType: ON_FAILURE` only restarts on non-zero
+   exit; `os.execv` replaces the process image without exiting.
+
 ---
 
 ## Bugs Fixed — Chronological Log
@@ -127,6 +149,15 @@ telegram-bot/
 | `419744f` | `userbot/sync.py` | `start_sync_handler()` had no `caption_suffix` parameter — suffix watermark was silently dropped from every synced message |
 | `dc6b4d4` | `handlers/copybot.py` | `_run_sync` didn't pass `caption_suffix` from opts to `start_sync_handler()` |
 | `5b72afef` | `handlers/history.py` | `_do_history_copy` read `config.CAPTION_REPLACE` but never read `config.CAPTION_SUFFIX` — suffix missing from all history copies |
+
+### Session 3 (2026-06-25) — /restart command + duplicate copy fix
+
+| Commit | File | Change |
+|---|---|---|
+| `8ebde8e` | `handlers/restart.py` | **New file**: `/restart` command — owner-only graceful restart via `os.execv()` |
+| `6c327ba` | `bot.py` | Register `/restart` handler + add to BotCommand list |
+| `b541a74` | `handlers/autoresume.py` | Add `claim_resume()` with atomic OS rename + stale-orphan recovery; update `clear_resume()` to also remove `.running.json` |
+| `dc8c646` | `handlers/copybot.py` | Use `_ar.claim_resume()` instead of `_ar.load_resume()` in `schedule_auto_resume()` — **root fix for duplicate copy files in destination** |
 
 ---
 
@@ -164,6 +195,8 @@ telegram-bot/
 
 2. The GitHub token is in the `GITHUB_PERSONAL_ACCESS_TOKEN` Replit secret.
    Push changes via the GitHub Contents API (GET sha → patch content → PUT).
+   **For large files** (>100KB payload), write the JSON to a temp file and use
+   `curl --data @/tmp/payload.json` instead of `-d "..."` to avoid "Argument list too long".
 
 3. To add a new persistent file, always use:
    ```python
@@ -177,3 +210,9 @@ telegram-bot/
 5. After any change to caption processing, verify that `caption_suffix` is being passed
    through every call chain: `_do_send()`, `send_album()`, `start_sync_handler()`,
    `_do_history_copy()`, and `copy_channel_files()` (in `forwarder.py`).
+
+6. **Never use `_ar.load_resume()` in `schedule_auto_resume()`** — always use
+   `_ar.claim_resume()`. This is the fix for duplicate copy files.
+
+7. When pushing code via GitHub API from Replit bash, always use `curl --data @file` for
+   files larger than ~50KB — inline `-d "..."` fails with "Argument list too long".
