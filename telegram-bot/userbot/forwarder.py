@@ -352,11 +352,13 @@ async def copy_channel_files(
     # ── destination pre-scan ──────────────────────────────────────────────────
     # Scan what files are ALREADY in the destination so we never re-send them
     # even when the SQLite dedup DB has been wiped (e.g. every Railway redeploy
-    # creates a fresh container).  Uses (filename, filesize) as the dedup key —
-    # robust enough for video files where the name is unique per title.
+    # creates a fresh container). Uses (filename, filesize) as the dedup key.
+    # A 5-minute timeout prevents hanging on very large destination channels.
     dest_file_keys: set = set()
-    _info("🔍  Pre-scanning destination for files already there (prevents duplicates)…")
-    try:
+    _PRESCAN_TIMEOUT = 300  # seconds
+    _info("🔍 Pre-scanning destination for existing files (prevents duplicates on redeploy)…")
+    _info("   ℹ️  Bot message will show scan progress. Use /stopjob to skip.")
+    async def _run_prescan():
         _dscan = 0
         async for _dm in client.iter_messages(dest_entity, reverse=False):
             _df = getattr(_dm, "file", None)
@@ -365,11 +367,21 @@ async def copy_channel_files(
             _dscan += 1
             if _dscan % 5000 == 0:
                 _info(f"   … scanned {_dscan:,} destination messages ({len(dest_file_keys):,} unique files)")
-        _info(f"📦  Destination scan done: {_dscan:,} messages, {len(dest_file_keys):,} unique files already there.")
+                if notifier is not None:
+                    await notifier.scan_progress(_dscan, len(dest_file_keys))
+    try:
+        await asyncio.wait_for(_run_prescan(), timeout=_PRESCAN_TIMEOUT)
+        _info(f"📦 Destination scan done: {len(dest_file_keys):,} unique files already there.")
+    except asyncio.TimeoutError:
+        _warn(f"⏱ Destination pre-scan timed out after {_PRESCAN_TIMEOUT // 60}m — "
+              f"continuing with {len(dest_file_keys):,} files found so far.")
+        if notifier is not None:
+            await notifier.scan_progress(-1, len(dest_file_keys))
+    except asyncio.CancelledError:
+        raise  # propagate — user ran /stopjob
     except Exception as _de:
         logger.warning("Destination pre-scan aborted (%s) — continuing without it", _de)
         dest_file_keys = set()
-
     if resume_from > 0 and not force_restart:
         _ok(f"♻️   Resuming from msg ID {resume_from} "
             f"(already copied: {state['copied']:,})")
