@@ -139,6 +139,7 @@ async def post_init(application: Application):
         BotCommand("stopcleaning",   "⛔ Cancel a running cleancaptions job"),
         # ── Dedup / maintenance ───────────────────────────────────────────────
         BotCommand("purgedups",      "🗑 Delete duplicate files in destination"),
+        BotCommand("stoppurge",      "🛑 Cancel a running purge job"),
         # ── Info / stats ──────────────────────────────────────────────────────
         BotCommand("listchats",      "📋 List your Telegram chats"),
         BotCommand("stats",          "📈 Show dedup statistics"),
@@ -167,7 +168,7 @@ async def post_shutdown(application: Application):
     logger.info("Graceful shutdown: cancelling tasks and disconnecting Telethon…")
 
     # ── 1. Cancel active copy / sync / clean jobs ─────────────────────────────
-    for key in ("active_copy_task", "active_sync_task", "active_clean_task"):
+    for key in ("active_copy_task", "active_sync_task", "active_cleancaptions_task", "active_purge_task"):
         task = bot_data.get(key)
         if task and not task.done():
             task.cancel()
