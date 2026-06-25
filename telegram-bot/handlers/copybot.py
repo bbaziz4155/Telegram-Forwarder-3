@@ -738,8 +738,20 @@ async def _run_multi_copy(client, src, dsts, dsts_raw, opts, bot, chat_id, msg_i
             break  # stop remaining destinations
 
         except Exception as e:
+        except Exception as e:
             logger.exception("Copy error for dest %s", dst_raw)
             all_stats.append((dst_raw, {}, str(e)))
+            # Edit the frozen progress message so the user sees the error clearly
+            try:
+                await bot.edit_message_text(
+                    f"❌ *Copy error*\n\n`{str(e)[:300]}`\n\n"
+                    f"_Make sure the userbot is a member of both channels._",
+                    chat_id=chat_id,
+                    message_id=notifier.message_id,
+                    parse_mode="Markdown",
+                )
+            except Exception:
+                pass
             try:
                 await bot.send_message(
                     chat_id,
@@ -749,7 +761,6 @@ async def _run_multi_copy(client, src, dsts, dsts_raw, opts, bot, chat_id, msg_i
             except Exception:
                 pass
             # Continue with next destination — don't break
-
     # ── Summary for multi-destination jobs ─────────────────────────────────────
     if total > 1 and all_stats and not cancelled:
         lines = ["📊 *Multi-Destination Copy Complete!*\n"]
