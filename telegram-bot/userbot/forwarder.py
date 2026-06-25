@@ -359,16 +359,19 @@ async def copy_channel_files(
     _info("🔍 Pre-scanning destination for existing files (prevents duplicates on redeploy)…")
     _info("   ℹ️  Bot message will show scan progress. Use /stopjob to skip.")
     async def _run_prescan():
-        _dscan = 0
+        _fcount = 0   # files with a named attachment (what matters)
+        _last_notify = 0
         async for _dm in client.iter_messages(dest_entity, reverse=False):
             _df = getattr(_dm, "file", None)
             if _df and getattr(_df, "name", None) and getattr(_df, "size", None):
                 dest_file_keys.add((_df.name, _df.size))
-            _dscan += 1
-            if _dscan % 5000 == 0:
-                _info(f"   … scanned {_dscan:,} destination messages ({len(dest_file_keys):,} unique files)")
+                _fcount += 1
+            # notify every 5,000 files found (not every 5,000 total messages)
+            if _fcount > 0 and _fcount % 5000 == 0 and _fcount != _last_notify:
+                _last_notify = _fcount
+                _info(f"   … {_fcount:,} files found in destination ({len(dest_file_keys):,} unique)")
                 if notifier is not None:
-                    await notifier.scan_progress(_dscan, len(dest_file_keys))
+                    await notifier.scan_progress(_fcount, len(dest_file_keys))
     try:
         await asyncio.wait_for(_run_prescan(), timeout=_PRESCAN_TIMEOUT)
         _info(f"📦 Destination scan done: {len(dest_file_keys):,} unique files already there.")
