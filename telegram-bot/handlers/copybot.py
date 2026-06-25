@@ -178,6 +178,38 @@ class BotProgressNotifier(ProgressNotifier):
             )
         except Exception as e:
             logger.warning(f"BotNotifier flood_wait notify failed: {e}")
+    async def scan_progress(self, scanned: int, unique: int):
+        """Update the bot message during destination pre-scan."""
+        now = time.time()
+        if now - self._last_edit < MIN_EDIT_INTERVAL:
+            return
+        self._last_edit = now
+        if scanned == -1:
+            # -1 = scan timed out
+            try:
+                await self.bot.edit_message_text(
+                    f"⏱ *Pre-scan timed out* — starting copy with partial dedup.\n\n"
+                    f"📦 Files found so far: `{unique:,}`",
+                    chat_id=self.chat_id,
+                    message_id=self.message_id,
+                    parse_mode="Markdown",
+                )
+            except Exception:
+                pass
+            return
+        try:
+            await self.bot.edit_message_text(
+                f"🔍 *Pre-scanning destination…*\n\n"
+                f"Scanned: `{scanned:,}` messages\n"
+                f"Unique files found: `{unique:,}`\n\n"
+                "_Checking what's already copied to prevent duplicates.\n"
+                "Send /stopjob to skip the scan and start immediately._",
+                chat_id=self.chat_id,
+                message_id=self.message_id,
+                parse_mode="Markdown",
+            )
+        except Exception as e:
+            logger.debug(f"scan_progress edit failed: {e}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
