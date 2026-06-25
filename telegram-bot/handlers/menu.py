@@ -15,9 +15,9 @@ def main_menu_keyboard(userbot_ready: bool = False):
         else "🔑 Connect Userbot"
     )
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ Add Forward Rule",   callback_data="add_rule")],
-        [InlineKeyboardButton("📋 List Forward Rules", callback_data="list_rules")],
-        [InlineKeyboardButton("🗑 Delete Forward Rule", callback_data="delete_rule")],
+        [InlineKeyboardButton("📡 Add Auto-Forward",   callback_data="add_rule")],
+        [InlineKeyboardButton("📋 My Auto-Forwards", callback_data="list_rules")],
+        [InlineKeyboardButton("🗑 Remove Auto-Forward", callback_data="delete_rule")],
         [InlineKeyboardButton("📜 Forward History",    callback_data="fwd_history")],
         [InlineKeyboardButton("🚫 Ignore List",        callback_data="ignore_list")],
         [InlineKeyboardButton(connect_label,           callback_data="userbot_login"),
@@ -58,12 +58,12 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📖 *Help — Telegram Forwarder Bot*\n\n"
         "*How to use:*\n"
         "1. Add this bot as an *admin* to the destination chat/channel.\n"
-        "2. Use *Add Forward Rule* to set up auto-forwarding.\n"
+        "2. Use *Add Auto-Forward* to link a source and destination channel.\n"
         "3. Tap *🔑 Connect Userbot* (or send /login) to enable copy/sync.\n\n"
-        "*Bot forwarding features:*\n"
-        "• ➕ *Add Forward Rule* — Forward messages from one chat to another\n"
-        "• 📋 *List Rules* — See all active forwarding rules\n"
-        "• 🗑 *Delete Rule* — Remove a forwarding rule\n"
+        "*Auto-Forward (real-time):*\n"
+        "• 📡 *Add Auto-Forward* — Link two channels: everything in the source is instantly sent to the destination\n"
+        "• 📋 *My Auto-Forwards* — See all your active channel pairs\n"
+        "• 🗑 *Remove Auto-Forward* — Delete a channel pair\n"
         "• 📜 *Forward History* — Forward past messages from a chat\n"
         "• 🚫 *Ignore List* — Chats to skip during bulk operations\n\n"
         "*Userbot copy features (no 'Forwarded from' tag):*\n"
