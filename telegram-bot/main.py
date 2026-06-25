@@ -57,6 +57,30 @@ def main():
         threading.Event().wait()
         return
 
+    # ── Startup syntax check ─────────────────────────────────────────────────
+    # Catches SyntaxErrors in any handler file before Railway's health check
+    # fails with a cryptic traceback. Runs AFTER the health server so Railway
+    # always gets a 200 OK even when a syntax error is found.
+    import ast as _ast, glob as _glob
+    _bot_dir = os.path.dirname(os.path.abspath(__file__))
+    _py_files = _glob.glob(os.path.join(_bot_dir, "**", "*.py"), recursive=True)
+    _syntax_errors = []
+    for _pf in sorted(_py_files):
+        try:
+            with open(_pf) as _f:
+                _ast.parse(_f.read(), filename=_pf)
+        except SyntaxError as _se:
+            _syntax_errors.append(f"{os.path.relpath(_pf, _bot_dir)}: line {_se.lineno} — {_se.msg}")
+    if _syntax_errors:
+        logger.error(
+            "\n\n🚨 STARTUP SYNTAX CHECK FAILED:\n%s\n\n"
+            "Fix the error above and redeploy.",
+            "\n".join(_syntax_errors),
+        )
+        threading.Event().wait()  # keep health server alive; do not start bot
+        return
+    logger.info("Startup syntax check passed (%d files checked).", len(_py_files))
+
     app = build_app(token)
     logger.info("Starting Telegram Forwarder Bot...")
     # drop_pending_updates=True: discard commands queued while the bot was
@@ -66,3 +90,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
