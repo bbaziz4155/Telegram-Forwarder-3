@@ -79,11 +79,6 @@ telegram-bot/           ← working directory (on sys.path at runtime)
 
 10. **`/resume` config-defaults path ignored `/setcaption` suffix** — when `/resume` fell through to the config-defaults branch (no `autoresume.json` on disk, checkpoint file present), the `caption_suffix` the user had set via `/setcaption` was never applied. Fixed by adding `"caption_suffix": context.user_data.get("caption_suffix", "")` alongside the other config overrides.
 
-  11. **Destination pre-scan blocking "Initializing copy…"** — when the bot starts a copy job, it pre-scans ALL destination channel messages to build a (filename, filesize) dedup set. On a large destination (70,000+ messages) this triggered Telegram GetHistoryRequest flood waits for 10–20+ minutes with NO feedback — the bot appeared frozen at "⏳ Initializing copy…". Fixed in three files:
-      - `forwarder.py`: wrapped the pre-scan in `asyncio.wait_for(timeout=300s)`; added `notifier.scan_progress()` call every 5,000 messages so the bot message updates in real time.
-      - `copybot.py`: added `BotProgressNotifier.scan_progress()` which edits the status message to show live count ("🔍 Pre-scanning destination… X messages scanned / Y unique files found"); handles timeout signal (scanned=-1) with a separate "timed out" message.
-      - `notifier.py`: added no-op `scan_progress()` to base `ProgressNotifier` so CLI usage works without error.
-  
 ### New features (all pushed to GitHub)
 
 1. **Persistent dedup** (`database.py` + `forwarder.py`)
@@ -113,6 +108,12 @@ telegram-bot/           ← working directory (on sys.path at runtime)
 
 ---
 
+  12. **Session revocation on Railway redeploy — graceful shutdown** — every time a new commit was pushed to GitHub, Railway would start a new container while the old one was still running. Telegram saw two simultaneous connections with the same session string and revoked one. The bot would restart with a dead session and show "⚠️ Session Revoked". Fixed in `bot.py`:
+      - Added `post_shutdown(application)` async function that PTB v21 calls automatically when SIGTERM arrives (every Railway redeploy sends SIGTERM first).
+      - On shutdown: (1) cancels active copy/sync/clean tasks, (2) cancels the userbot reconnect loop, (3) cleanly disconnects Telethon with a 10-second timeout.
+      - Added `.post_shutdown(post_shutdown)` to the `Application.builder()` chain so PTB calls it on every clean exit.
+      - No signal wiring needed — PTB v21's `run_polling()` handles SIGTERM natively.
+  
 ## Pending features (NOT yet built — owner wants these)
 
 ### 1. Dual-userbot parallel copy (most wanted)
