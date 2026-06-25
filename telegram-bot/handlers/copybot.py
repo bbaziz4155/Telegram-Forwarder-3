@@ -206,7 +206,7 @@ class BotProgressNotifier(ProgressNotifier):
                 f"🔍 *Pre-scanning destination…*\n\n"
                 f"Files found: `{scanned:,}` (unique: `{unique:,}`)\n\n"
                 "_Checking what's already in the destination to prevent duplicates.\n"
-                "Send /stopjob to skip and start immediately._",
+                "Pre-scan times out automatically in 5 min — copying will start on its own._",
                 chat_id=self.chat_id,
                 message_id=self.message_id,
                 parse_mode="Markdown",
@@ -598,6 +598,8 @@ async def _launch_job(query, context: ContextTypes.DEFAULT_TYPE, opts: dict, src
     elif mode == "copy":
         opts["caption_suffix"] = context.user_data.get("caption_suffix", config.CAPTION_SUFFIX)
         _ar.save_resume(chat_id, src, dsts[0], opts)
+        # Fresh skip-event per job — /skipscan sets it to abort the pre-scan early
+        context.bot_data["prescan_skip_event"] = asyncio.Event()
         if opts.get("dual_copy") and bridge.is_ready_2(context.bot_data) and len(dsts) == 1:
             client_2 = bridge.get_client_2(context.bot_data)
             await query.edit_message_text(
@@ -750,6 +752,7 @@ async def _run_multi_copy(client, src, dsts, dsts_raw, opts, bot, chat_id, msg_i
                 rate_delay=lambda: bot_data.get(
                     "active_copy_delay", opts.get("rate_delay", _SPEED_CYCLE[0][1])
                 ),
+                prescan_skip_event=bot_data.get("prescan_skip_event"),
             )
             job_stats = bot_data.get("active_copy_stats", {})
             all_stats.append((dst_raw, job_stats.copy(), None))
@@ -964,6 +967,7 @@ async def _run_dual_copy(client, client_2, src, dst, opts, bot, chat_id, status_
             interactive=False,
             rate_delay=rate_delay,
             min_id=mid_id,
+            prescan_skip_event=bot_data.get("prescan_skip_event"),
         )
 
     async def _worker_b():
@@ -978,6 +982,7 @@ async def _run_dual_copy(client, client_2, src, dst, opts, bot, chat_id, status_
             interactive=False,
             rate_delay=rate_delay,
             max_id=mid_id + 1,
+            prescan_skip_event=bot_data.get("prescan_skip_event"),
         )
 
     task_a      = asyncio.create_task(_worker_a())
@@ -1115,6 +1120,7 @@ async def _run_copy(client, src, dst, opts, notifier, bot, chat_id, bot_data):
             notifier=notifier,
             interactive=False,
             rate_delay=lambda: bot_data.get("active_copy_delay", opts.get("rate_delay", _SPEED_CYCLE[0][1])),
+            prescan_skip_event=bot_data.get("prescan_skip_event"),
         )
     except asyncio.CancelledError:
         # Edit the progress message to a clear "cancelled" state — do NOT call
@@ -1437,6 +1443,11 @@ def _build_status_text(bot_data: dict) -> str:
                     "\n💾 *Checkpoint available* for configured channel pair.\n"
                     "_Use /resume to continue from last saved position._"
                 )
+
+    # Purge job
+    purge_task = bot_data.get("active_purge_task")
+    if purge_task and not purge_task.done():
+        lines.append("\n🗑 *Purge job running* — use /stoppurge to cancel.")
 
     return "\n".join(lines)
 
@@ -3230,12 +3241,74 @@ async def stopcleaning_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             parse_mode="Markdown",
         )
 
+
+async def skipscan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /skipscan — abort the destination pre-scan and start copying immediately.
+    The pre-scan normally runs up to 5 min; this fires the skip-event so the
+    scan loop exits and copying begins with whatever was found so far.
+    """
+    event = context.bot_data.get("prescan_skip_event")
+    copy_task = context.bot_data.get("active_copy_task")
+    if copy_task and not copy_task.done() and event and not event.is_set():
+        event.set()
+        await update.message.reply_text(
+            "⏩ *Pre-scan skip requested!*\n\n"
+            "Copying will start immediately with the files already found in the destination.\n"
+            "_Use /status to watch progress._",
+            parse_mode="Markdown",
+        )
+    elif copy_task and not copy_task.done():
+        await update.message.reply_text(
+            "ℹ️ Pre-scan already finished — copy job is running.\n"
+            "Use /status to see progress or /stopjob to cancel."
+        )
+    else:
+        await update.message.reply_text(
+            "No copy job is currently running.\n"
+            "Use /copy to start one."
+        )
+
+
+async def clearresume_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /clearresume — manually wipe the auto-resume checkpoint without changing channels.
+    Useful when you want to start fresh from the beginning.
+    """
+    copy_task = context.bot_data.get("active_copy_task")
+    if copy_task and not copy_task.done():
+        await update.message.reply_text(
+            "⚠️ A copy job is currently running.\n"
+            "Stop it first with /stopjob, then use /clearresume to clear the checkpoint."
+        )
+        return
+    pending = _ar.load_resume()
+    if pending:
+        src = pending.get("src", "?")
+        dst = pending.get("dst", "?")
+        _ar.clear_resume()
+        await update.message.reply_text(
+            f"🗑 *Auto-resume checkpoint cleared.*\n\n"
+            f"It was pointing at:\n"
+            f"📡 Source: `{src}`\n"
+            f"📥 Dest:   `{dst}`\n\n"
+            f"Use /copy to start a fresh job, or /resume if a checkpoint file still exists.",
+            parse_mode="Markdown",
+        )
+    else:
+        await update.message.reply_text(
+            "📭 No auto-resume checkpoint found — nothing to clear."
+        )
+
+
 def get_extra_handlers() -> list:
     """Standalone command handlers registered outside the conversation."""
     return [
         CommandHandler("status",    status_cmd),
+        CommandHandler("skipscan",   skipscan_cmd),
         CommandHandler("stopjob",   stopjob_cmd),
         CommandHandler("resume",    resume_cmd),
+        CommandHandler("clearresume", clearresume_cmd),
         CommandHandler("stopsync",  stopsync_cmd),
         CommandHandler("synctest",  synctest_cmd),
         CommandHandler("listchats", listchats_cmd),
@@ -3261,3 +3334,4 @@ def get_extra_handlers() -> list:
         CallbackQueryHandler(ar_resume_saved_callback,  pattern="^ar_resume_saved$"),
         CallbackQueryHandler(ar_cancel_saved_callback,  pattern="^ar_cancel_saved$"),
     ]
+
