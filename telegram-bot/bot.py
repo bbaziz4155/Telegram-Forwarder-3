@@ -193,7 +193,7 @@ async def post_shutdown(application: Application):
     logger.info("Graceful shutdown: cancelling tasks and disconnecting Telethon…")
 
     # ── 1. Cancel active copy / sync / clean jobs ─────────────────────────────
-    for key in ("active_copy_task", "active_sync_task", "active_cleancaptions_task", "active_purge_task"):
+    for key in ("active_copy_task", "active_copy_task_2", "active_sync_task", "active_cleancaptions_task", "active_purge_task"):
         task = bot_data.get(key)
         if task and not task.done():
             task.cancel()
@@ -202,25 +202,25 @@ async def post_shutdown(application: Application):
             except Exception:
                 pass  # cancelled / timed out — that's fine
 
-    # ── 2. Cancel the userbot background connect/reconnect loop ───────────────
-    connect_task = bot_data.get("_userbot_connect_task")
-    if connect_task and not connect_task.done():
-        connect_task.cancel()
-        try:
-            await asyncio.wait_for(asyncio.shield(connect_task), timeout=3.0)
-        except Exception:
-            pass
+    # ── 2. Cancel the userbot background connect/reconnect loops ──────────────
+    for _ctkey in ("_userbot_connect_task", "_userbot_connect_task_2"):
+        connect_task = bot_data.get(_ctkey)
+        if connect_task and not connect_task.done():
+            connect_task.cancel()
+            try:
+                await asyncio.wait_for(asyncio.shield(connect_task), timeout=3.0)
+            except Exception:
+                pass
 
     # ── 3. Disconnect Telethon cleanly ────────────────────────────────────────
-    client = bot_data.get("userbot_client")
-    if client is not None:
-        try:
-            await asyncio.wait_for(client.disconnect(), timeout=10.0)
-            logger.info("Graceful shutdown: Telethon disconnected cleanly.")
-        except Exception as e:
-            logger.warning("Graceful shutdown: Telethon disconnect error: %s", e)
-    else:
-        logger.info("Graceful shutdown: no Telethon client to disconnect.")
+    for _ck, _ck_label in (("userbot_client", "client_1"), ("userbot_client_2", "client_2")):
+        _cl = bot_data.get(_ck)
+        if _cl is not None:
+            try:
+                await asyncio.wait_for(_cl.disconnect(), timeout=10.0)
+                logger.info("Graceful shutdown: Telethon %s disconnected cleanly.", _ck_label)
+            except Exception as e:
+                logger.warning("Graceful shutdown: Telethon %s disconnect error: %s", _ck_label, e)
 
     logger.info("Graceful shutdown complete — process will now exit.")
 
