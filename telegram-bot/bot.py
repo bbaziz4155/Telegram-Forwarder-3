@@ -32,6 +32,7 @@ from handlers import admin_mgmt as admin_mgmt_handler
 from handlers import strippatterns as strippatterns_handler
 from handlers import purgedups as purgedups_handler
 from handlers import setchannel as setchannel_handler
+from handlers import channelinfo as channelinfo_handler
 from states import (
     MAIN_MENU,
     ADD_RULE_SOURCE,
@@ -117,6 +118,7 @@ async def post_init(application: Application):
         BotCommand("setsource",      "📡 Set default source channel"),
         BotCommand("setdest",        "📥 Set default destination channel"),
         BotCommand("channels",       "📋 Show current source & destination"),
+        BotCommand("channelinfo",    "📊 Get channel info (msg count, dates, media)"),
         # ── Copy job ──────────────────────────────────────────────────────────
         BotCommand("copy",           "📦 Bulk copy files (no forward tag)"),
         BotCommand("dryrun",         "🔍 Preview copy without sending"),
@@ -285,6 +287,9 @@ def build_app(token: str) -> Application:
         app.add_handler(h)
 
     for h in setchannel_handler.get_handlers():
+        app.add_handler(h)
+
+    for h in channelinfo_handler.get_handlers():
         app.add_handler(h)
 
     app.add_handler(MessageHandler(filters.COMMAND, menu_handler.unknown_command))
