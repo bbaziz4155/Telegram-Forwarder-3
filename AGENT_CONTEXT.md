@@ -79,6 +79,11 @@ telegram-bot/           ← working directory (on sys.path at runtime)
 
 10. **`/resume` config-defaults path ignored `/setcaption` suffix** — when `/resume` fell through to the config-defaults branch (no `autoresume.json` on disk, checkpoint file present), the `caption_suffix` the user had set via `/setcaption` was never applied. Fixed by adding `"caption_suffix": context.user_data.get("caption_suffix", "")` alongside the other config overrides.
 
+  11. **Destination pre-scan blocking "Initializing copy…"** — when the bot starts a copy job, it pre-scans ALL destination channel messages to build a (filename, filesize) dedup set. On a large destination (70,000+ messages) this triggered Telegram GetHistoryRequest flood waits for 10–20+ minutes with NO feedback — the bot appeared frozen at "⏳ Initializing copy…". Fixed in three files:
+      - `forwarder.py`: wrapped the pre-scan in `asyncio.wait_for(timeout=300s)`; added `notifier.scan_progress()` call every 5,000 messages so the bot message updates in real time.
+      - `copybot.py`: added `BotProgressNotifier.scan_progress()` which edits the status message to show live count ("🔍 Pre-scanning destination… X messages scanned / Y unique files found"); handles timeout signal (scanned=-1) with a separate "timed out" message.
+      - `notifier.py`: added no-op `scan_progress()` to base `ProgressNotifier` so CLI usage works without error.
+  
 ### New features (all pushed to GitHub)
 
 1. **Persistent dedup** (`database.py` + `forwarder.py`)
