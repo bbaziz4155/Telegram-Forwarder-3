@@ -15,8 +15,8 @@ async def add_rule_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     await query.edit_message_text(
-        "➕ *Add Forward Rule*\n\n"
-        "Step 1/2: Send me the *source chat ID* (the chat to forward FROM).\n\n"
+        "📡 *Add Auto-Forward*\n\n"
+        "Step 1 of 2 — Send me the *source chat ID* (the channel/group to copy FROM).\n\n"
         "💡 To get a chat ID:\n"
         "• Forward any message from that chat to @userinfobot\n"
         "• Or add @RawDataBot to the chat and it will show the ID\n"
@@ -45,7 +45,7 @@ async def add_rule_source(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         f"✅ Source chat: {_safe(chat_name)} (`{chat_id}`)\n\n"
-        "Step 2/2: Now send me the *destination chat ID* (the chat to forward TO).\n\n"
+        "Step 2 of 2 — Now send me the *destination chat ID* (where messages will be sent TO).\n\n"
         "Send the chat ID, or /cancel to go back.",
         parse_mode="Markdown"
     )
@@ -72,10 +72,10 @@ async def add_rule_dest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     source_id = context.user_data["rule_source_id"]
 
     await update.message.reply_text(
-        f"📋 *Confirm Forward Rule*\n\n"
+        f"📋 *Confirm Auto-Forward*\n\n"
         f"From: {_safe(source_name)} (`{source_id}`)\n"
         f"To: {_safe(chat_name)} (`{chat_id}`)\n\n"
-        "Confirm this rule?",
+        "Set up this auto-forward?",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
             [
@@ -110,9 +110,9 @@ async def add_rule_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
 
     await query.edit_message_text(
-        f"✅ *Forward rule created!*\n\n"
-        f"Messages from {_safe(source_name)} will now be forwarded to {_safe(dest_name)}.\n\n"
-        f"Rule ID: `{rule_id}`",
+        f"✅ *Auto-Forward created!*\n\n"
+        f"Every new message in {_safe(source_name)} will be instantly forwarded to {_safe(dest_name)}.\n\n"
+        f"Auto-Forward ID: `{rule_id}`",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back to Menu", callback_data="menu")]])
     )
@@ -128,7 +128,7 @@ async def list_rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not rules:
         text = "📋 *Forward Rules*\n\nNo active rules. Use *Add Forward Rule* to create one."
     else:
-        lines = ["📋 *Active Forward Rules*\n"]
+        lines = ["📋 *My Active Auto-Forwards*\n"]
         for r in rules:
             src = _safe(r['source_chat_name'])
             dst = _safe(r['dest_chat_name'])
@@ -189,9 +189,9 @@ async def delete_rule_select(update: Update, context: ContextTypes.DEFAULT_TYPE)
     }
 
     if deleted:
-        text = f"✅ Rule `#{rule_id}` deleted successfully."
+        text = f"✅ Auto-Forward `#{rule_id}` removed successfully."
     else:
-        text = "❌ Rule not found or you don't have permission."
+        text = "❌ Auto-Forward not found or you don't have permission."
 
     await query.edit_message_text(
         text,
