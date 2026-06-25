@@ -11,6 +11,7 @@ import logging
 
 from telegram import Update
 from telegram.ext import CommandHandler, ContextTypes
+import userbot_bridge as bridge
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +32,8 @@ async def purgedups_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     dest_arg = args[0]
     chat_id = update.effective_chat.id
 
-    client = context.bot_data.get("userbot_client")
-    if not client or not context.bot_data.get("userbot_ready"):
+    client = bridge.get_client(context.bot_data)
+    if not bridge.is_ready(context.bot_data):
         await update.message.reply_text(
             "❌ Userbot not connected. Use /login first."
         )
