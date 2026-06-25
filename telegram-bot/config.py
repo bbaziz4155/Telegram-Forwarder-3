@@ -46,7 +46,7 @@ SOURCE_CHANNEL = _int_env("SOURCE_CHANNEL", 0)
 DEST_CHANNEL = _int_env("DEST_CHANNEL", 0)
 
 # ── Your channel link — replaces ALL @usernames AND t.me links in captions ───
-CAPTION_REPLACE = os.environ.get("CAPTION_REPLACE", "@BackupChannel5211")
+CAPTION_REPLACE = os.environ.get("CAPTION_REPLACE", "")
 
 # ── Caption suffix — appended as a new line to every copied file's caption ───
 # Set CAPTION_SUFFIX in Railway Variables to pre-configure the watermark so
