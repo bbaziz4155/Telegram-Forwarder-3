@@ -158,6 +158,7 @@ async def commands_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         "🗑 *Maintenance*\n"
         "`/purgedups` — Delete duplicate files in destination\n"
+        "`/stoppurge` — Cancel a running purge job\n"
         "`/clearhistory` — Clear copy job checkpoints\n\n"
 
         "📊 *Stats & Info*\n"
