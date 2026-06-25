@@ -17,6 +17,7 @@ from telegram.ext import ApplicationHandlerStop
 import database as db
 import forwarder
 import userbot_bridge
+import channel_settings
 import config
 from handlers import menu as menu_handler
 from handlers import rules as rules_handler
@@ -30,7 +31,7 @@ from handlers import deletesession as deletesession_handler
 from handlers import admin_mgmt as admin_mgmt_handler
 from handlers import strippatterns as strippatterns_handler
 from handlers import purgedups as purgedups_handler
-import railway_monitor
+from handlers import setchannel as setchannel_handler
 from states import (
     MAIN_MENU,
     ADD_RULE_SOURCE,
@@ -79,6 +80,9 @@ async def _admin_gate(update: Update, context) -> None:
 
 async def post_init(application: Application):
     """Called after the application is initialized."""
+    # Apply any saved source/dest overrides before forwarder/copybot read config
+    channel_settings.load()
+
     await db.init_db()
     await forwarder.load_rules_on_startup(application.bot_data)
     await userbot_bridge.init_userbot(application)
@@ -99,9 +103,6 @@ async def post_init(application: Application):
     # Schedule auto-resume check
     asyncio.create_task(copybot_handler.schedule_auto_resume(application))
 
-    # Start Railway credit monitor (no-op if RAILWAY_TOKEN not set)
-    asyncio.create_task(railway_monitor.start_credit_monitor(application))
-
     # ── Register all commands in the Telegram "/" menu ────────────────────────
     await application.bot.set_my_commands([
         # ── Core ──────────────────────────────────────────────────────────────
@@ -112,6 +113,10 @@ async def post_init(application: Application):
         BotCommand("login",          "🔑 Connect your Telegram account"),
         BotCommand("gensession",     "🔐 Generate a fresh SESSION_STRING in-chat"),
         BotCommand("deletesession",  "🗑 Permanently revoke the active session"),
+        # ── Channel config ────────────────────────────────────────────────────
+        BotCommand("setsource",      "📡 Set default source channel"),
+        BotCommand("setdest",        "📥 Set default destination channel"),
+        BotCommand("channels",       "📋 Show current source & destination"),
         # ── Copy job ──────────────────────────────────────────────────────────
         BotCommand("copy",           "📦 Bulk copy files (no forward tag)"),
         BotCommand("dryrun",         "🔍 Preview copy without sending"),
@@ -140,8 +145,6 @@ async def post_init(application: Application):
         BotCommand("speed",          "⚡ Set copy speed (safe / fast / turbo)"),
         # ── Admin ─────────────────────────────────────────────────────────────
         BotCommand("cancel",         "✖️ Cancel current wizard/operation"),
-        # ── Railway ───────────────────────────────────────────────────────────
-        BotCommand("creditcheck",    "💰 Check Railway credit balance"),
     ])
 
 
@@ -262,7 +265,8 @@ def build_app(token: str) -> Application:
     for h in purgedups_handler.get_purgedups_handlers():
         app.add_handler(h)
 
-    app.add_handler(CommandHandler("creditcheck", railway_monitor.creditcheck_cmd))
+    for h in setchannel_handler.get_handlers():
+        app.add_handler(h)
 
     app.add_handler(MessageHandler(filters.COMMAND, menu_handler.unknown_command))
     app.add_handler(
