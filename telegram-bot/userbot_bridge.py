@@ -32,7 +32,8 @@ logger = logging.getLogger(__name__)
 
 API_ID         = int(os.environ.get("TELEGRAM_API_ID",   "0"))
 API_HASH       = os.environ.get("TELEGRAM_API_HASH", "")
-SESSION_STRING = os.environ.get("SESSION_STRING", "")
+SESSION_STRING  = os.environ.get("SESSION_STRING",  "")
+SESSION_STRING_2 = os.environ.get("SESSION_STRING_2", "")
 SESSION_PATH   = os.path.join(os.path.dirname(__file__), "sessions", "userbot")
 
 _DATA_DIR    = os.environ.get("DATA_DIR",
@@ -343,6 +344,107 @@ async def _connect_loop(bot_data: dict) -> None:
                 await asyncio.sleep(_SLOW_DELAY)
 
 
+
+
+async def _connect_loop_2(bot_data: dict) -> None:
+    """
+    Background task for the second Telethon userbot client (SESSION_STRING_2).
+    Simplified version of _connect_loop — no session-revocation flag handling.
+    """
+    try:
+        from telethon import TelegramClient
+        from telethon.sessions import StringSession
+    except ImportError:
+        logger.warning("telethon not installed — userbot_2 disabled")
+        return
+
+    attempt = 0
+    while True:
+        attempt += 1
+        client = None
+        try:
+            if SESSION_STRING_2:
+                try:
+                    session = StringSession(SESSION_STRING_2)
+                except Exception as e:
+                    logger.warning("SESSION_STRING_2 invalid (%s) — skipping userbot_2", e)
+                    bot_data["userbot_ready_2"]  = False
+                    bot_data["userbot_reason_2"] = "invalid_session"
+                    return
+            else:
+                logger.warning("SESSION_STRING_2 not set — userbot_2 disabled")
+                bot_data["userbot_ready_2"]  = False
+                bot_data["userbot_reason_2"] = "not_configured"
+                return
+
+            client = TelegramClient(
+                session, API_ID, API_HASH,
+                device_model="Desktop",
+                system_version="Linux x86_64",
+                app_version="4.16.4",
+                lang_code="en",
+                system_lang_code="en-US",
+            )
+            bot_data["userbot_client_2"] = client
+            bot_data["userbot_reason_2"] = "connecting"
+            bot_data.pop("userbot_locked_2", None)
+            client.flood_sleep_threshold = 60
+
+            await client.connect()
+
+            if not await client.is_user_authorized():
+                logger.warning("Userbot_2 session not authorised — update SESSION_STRING_2.")
+                bot_data["userbot_ready_2"]  = False
+                bot_data["userbot_reason_2"] = "needs_login"
+                await asyncio.sleep(_SLOW_DELAY)
+                continue
+
+            me = await client.get_me()
+            bot_data["userbot_client_2"] = client
+            bot_data["userbot_ready_2"]  = True
+            bot_data["userbot_reason_2"] = ""
+            logger.info("Userbot_2 bridge connected as %s (@%s)", me.first_name, me.username)
+
+            while True:
+                await asyncio.sleep(30)
+                try:
+                    if not client.is_connected():
+                        logger.warning("Userbot_2 connection lost — reconnecting…")
+                        bot_data["userbot_reason_2"] = "reconnecting"
+                        break
+                    if not await client.is_user_authorized():
+                        logger.warning("Userbot_2 session deauthorised — reconnecting…")
+                        bot_data["userbot_reason_2"] = "session_revoked"
+                        break
+                except Exception as e:
+                    logger.warning("Userbot_2 health-check failed: %s — reconnecting…", e)
+                    bot_data["userbot_reason_2"] = "reconnecting"
+                    break
+
+            bot_data["userbot_ready_2"] = False
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+            await asyncio.sleep(_FAST_DELAY)
+
+        except Exception as e:
+            if client:
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
+            if "database is locked" in str(e).lower():
+                if attempt == 1:
+                    bot_data["userbot_locked_2"] = True
+                delay = _FAST_DELAY if attempt <= _FAST_RETRIES else _SLOW_DELAY
+                bot_data["userbot_reason_2"] = "reconnecting"
+                await asyncio.sleep(delay)
+            else:
+                logger.error("Userbot_2 connect failed: %s", e)
+                bot_data["userbot_reason_2"] = "reconnecting"
+                await asyncio.sleep(_SLOW_DELAY)
+
 async def init_userbot(application) -> None:
     """PTB post_init hook — starts the connection task and returns immediately."""
     bot_data = application.bot_data
@@ -363,6 +465,13 @@ async def init_userbot(application) -> None:
     bot_data["_userbot_connect_task"] = task
     logger.info("Userbot bridge task started in background")
 
+    if SESSION_STRING_2:
+        bot_data.setdefault("userbot_ready_2",  False)
+        bot_data.setdefault("userbot_reason_2", "")
+        task2 = asyncio.create_task(_connect_loop_2(bot_data))
+        bot_data["_userbot_connect_task_2"] = task2
+        logger.info("Userbot_2 bridge task started in background")
+
 
 def get_client(bot_data: dict):
     return bot_data.get("userbot_client")
@@ -378,3 +487,15 @@ def is_starting_up(bot_data: dict) -> bool:
 
 def is_locked(bot_data: dict) -> bool:
     return bot_data.get("userbot_locked", False)
+
+
+def get_client_2(bot_data: dict):
+    return bot_data.get("userbot_client_2")
+
+
+def is_ready_2(bot_data: dict) -> bool:
+    return bot_data.get("userbot_ready_2", False)
+
+
+def is_locked_2(bot_data: dict) -> bool:
+    return bot_data.get("userbot_locked_2", False)
