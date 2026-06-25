@@ -34,6 +34,11 @@ async def _run_purgedups(
         except Exception:
             pass
 
+    def _cleanup():
+        """Release the task slot and cancel flag at every exit path."""
+        bot_data.pop(_PURGE_CANCEL_KEY, None)
+        bot_data["active_purge_task"] = None
+
     seen: dict = {}
     dups: list = []
     scanned = 0
@@ -48,6 +53,7 @@ async def _run_purgedups(
                     f"🛑 *Purge cancelled.*\n\n"
                     f"Scanned `{scanned:,}` messages — `{len(dups):,}` duplicates found, none deleted."
                 )
+                _cleanup()
                 return
 
             scanned += 1
@@ -72,19 +78,19 @@ async def _run_purgedups(
             f"⚠️ Scan interrupted after `{scanned:,}` messages.\n"
             f"Found `{len(dups):,}` duplicates — none deleted."
         )
+        _cleanup()
         return
     except Exception as e:
         await _edit(f"❌ Scan error after `{scanned:,}` messages:\n`{e}`")
+        _cleanup()
         return
-    finally:
-        bot_data.pop(_PURGE_CANCEL_KEY, None)
-        bot_data["active_purge_task"] = None
 
     if not dups:
         await _edit(
             f"✅ *No duplicates found* in *{dest_name}*!\n"
             f"Scanned `{scanned:,}` messages — every file is unique."
         )
+        _cleanup()
         return
 
     await _edit(
@@ -106,6 +112,7 @@ async def _run_purgedups(
                 f"📊 Scanned: `{scanned:,}` | Found: `{len(dups):,}` | "
                 f"Deleted: `{deleted:,}`"
             )
+            _cleanup()
             return
 
         batch = dups[i : i + 100]
@@ -142,6 +149,7 @@ async def _run_purgedups(
     if failed_del:
         lines.append(f"❌ Failed to delete:  `{failed_del:,}`")
 
+    _cleanup()
     await _edit("\n".join(lines))
 
 
@@ -150,7 +158,7 @@ async def purgedups_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not args:
         await update.message.reply_text(
             "🗑 *Purge Duplicates*\n\n"
-            "Usage: `/purgedups <channel\\_id\\_or\\_username>`\n\n"
+            "Usage: `/purgedups <channel\_id\_or\_username>`\n\n"
             "Scans the destination channel, finds duplicate file messages "
             "\\(same filename \\+ filesize\\), and deletes all but the *oldest* copy\\.\n\n"
             "Example:\n`/purgedups \\-1001234567890`\n\n"
