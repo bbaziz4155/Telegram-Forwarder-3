@@ -1191,6 +1191,11 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def stopjob_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     task = context.bot_data.get("active_copy_task")
     if task and not task.done():
+        # Delete the resume file NOW — synchronously, before task.cancel() and
+        # before any possible Railway SIGKILL — so a subsequent restart cannot
+        # silently auto-resume a job the user explicitly stopped.
+        _ar.clear_resume()
+        context.bot_data[_AR_CANCEL_KEY] = True   # abort any pending countdown
         task.cancel()
         # Tell the user what we just stopped — dry runs show a different label
         await update.message.reply_text("⛔ Stopping job…")
