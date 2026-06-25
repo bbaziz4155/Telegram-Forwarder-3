@@ -298,6 +298,8 @@ async def copy_channel_files(
     notifier: "ProgressNotifier | None" = None,
     interactive: bool = True,
     rate_delay: float = RATE_DELAY,
+    min_id: int = None,
+    max_id: int = None,
 ):
     """
     Copy all messages from source → dest without "Forwarded from" tag.
@@ -341,6 +343,9 @@ async def copy_channel_files(
 
     state       = ckpt.load(source_id, dest_id)
     resume_from = state["last_msg_id"]
+    # If an explicit min_id is provided (e.g. dual-copy worker scope), use it
+    if min_id is not None:
+        resume_from = min_id
 
     # Load persistent dedup sets from SQLite (survives job restarts / re-runs).
     # db_msg_ids  — source message IDs already copied in ANY previous run
@@ -518,6 +523,7 @@ async def copy_channel_files(
             source_entity,
             limit=limit,
             min_id=resume_from,
+            max_id=max_id,
             reverse=True,
             **_iter_extra,
         ):
