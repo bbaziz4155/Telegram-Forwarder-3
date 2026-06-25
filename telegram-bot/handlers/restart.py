@@ -8,9 +8,11 @@ in-process restart: the same PID, no Railway restart counter consumed,
 and no gap in the health-check endpoint.
 """
 import asyncio
+import json
 import logging
 import os
 import sys
+import time
 
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -45,7 +47,7 @@ async def restart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     bot_data = context.bot_data
 
     # ── 1. Cancel active copy / sync / clean jobs ──────────────────────────
-    for key in ("active_copy_task", "active_sync_task", "active_clean_task"):
+    for key in ("active_copy_task", "active_sync_task", "active_cleancaptions_task", "active_purge_task"):
         task = bot_data.get(key)
         if task and not task.done():
             logger.info("Restart: cancelling %s", key)
@@ -80,6 +82,20 @@ async def restart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     # Give Telegram a moment to deliver the confirmation message before
     # the process image is replaced.
     await asyncio.sleep(1.5)
+
+    # Save a marker so the bot sends a "✅ Back online!" notification on startup.
+    _data_dir = os.environ.get("DATA_DIR", os.path.join(os.path.dirname(__file__), "..", "data"))
+    _marker   = os.path.join(_data_dir, "restart_pending.json")
+    try:
+        os.makedirs(_data_dir, exist_ok=True)
+        with open(_marker, "w") as _f:
+            json.dump({
+                "chat_id":   update.effective_chat.id,
+                "user_id":   update.effective_user.id,
+                "timestamp": time.time(),
+            }, _f)
+    except Exception as _e:
+        logger.warning("Could not write restart_pending.json: %s", _e)
 
     # os.execv replaces the current process image in-place — same PID,
     # no Railway restart-policy counter incremented, health endpoint keeps
