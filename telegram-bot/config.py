@@ -34,10 +34,16 @@ def _bool_env(key: str, default: bool) -> bool:
 OWNER_ID = _int_env("ADMIN_ID", 0)
 
 # ── Source channel (where files are copied FROM) ─────────────────────────────
-SOURCE_CHANNEL = _int_env("SOURCE_CHANNEL", -1001811670072)
+# Set SOURCE_CHANNEL in Railway Variables.  Default is 0 (not set) — the bot
+# will refuse to start a job until a channel is configured via /setsource or
+# the env var.  Do NOT hardcode a real channel ID here; use /setsource instead
+# so the value is stored in channel_settings.json and survives redeploys.
+SOURCE_CHANNEL = _int_env("SOURCE_CHANNEL", 0)
 
 # ── Destination channel (where files are copied TO) ──────────────────────────
-DEST_CHANNEL = _int_env("DEST_CHANNEL", -1003563437550)
+# Set DEST_CHANNEL in Railway Variables.  Default is 0 (not set).
+# Use /setdest in the bot to configure and persist the value.
+DEST_CHANNEL = _int_env("DEST_CHANNEL", 0)
 
 # ── Your channel link — replaces ALL @usernames AND t.me links in captions ───
 CAPTION_REPLACE = os.environ.get("CAPTION_REPLACE", "@BackupChannel5211")
