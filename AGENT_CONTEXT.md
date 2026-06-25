@@ -170,3 +170,25 @@ curl -s -H "Authorization: token $GITHUB_PERSONAL_ACCESS_TOKEN" \
 - Per-account `/speed2` — throttle Account B independently
 - Persist dual-copy resume state so crash-restart continues as dual (not single-account)
 - Dual-copy progress bar (estimated % based on message ID range)
+
+---
+
+## Auto-resume mismatch fix (2026-06-25)
+
+### Problem
+- `DEST_CHANNEL` defaults to `0` when user has never run `/setdest`. Comparing saved `dst=-1003563437550` against `0` always triggered the "Auto-Resume Cancelled" guard — a false positive that wiped the checkpoint silently.
+- When mismatch was legitimate, the checkpoint was silently cleared with no recovery option.
+
+### Fix (commit `851ec1fe`, `handlers/copybot.py`)
+1. **Guard now only compares configured (non-zero) values:**
+   ```python
+   src_mismatch = bool(_cfg_src) and src != _cfg_src
+   dst_mismatch = bool(_cfg_dst) and dst != _cfg_dst
+   ```
+2. **Inline buttons instead of silent wipe** — mismatch now shows:
+   - `↩️ Resume with saved channels` → calls `_ar_launch_from_mismatch()` which skips the guard and launches normally
+   - `🚫 Cancel` → discards checkpoint
+3. New constants/functions: `_AR_MISMATCH_KEY`, `ar_resume_saved_callback`, `ar_cancel_saved_callback`, `_ar_launch_from_mismatch`
+
+### Session Revoked (separate issue)
+Not a code bug — Telegram invalidated the session. User must `/gensession` → update `SESSION_STRING` in Railway.
