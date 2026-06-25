@@ -2117,7 +2117,7 @@ async def schedule_auto_resume(application) -> None:
     Waits for the userbot to be ready, shows a countdown with a Cancel button,
     then starts the job unless the user cancels within _AR_COUNTDOWN seconds.
     """
-    resume = _ar.load_resume()
+    resume = _ar.claim_resume()
     if not resume:
         return  # nothing to resume — fast path
 
