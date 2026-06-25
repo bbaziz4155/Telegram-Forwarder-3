@@ -149,8 +149,10 @@ async def post_init(application: Application):
         BotCommand("copy",           "📦 Bulk copy files (no forward tag)"),
         BotCommand("dryrun",         "🔍 Preview copy without sending"),
         BotCommand("resume",         "▶️ Resume an interrupted copy job"),
+        BotCommand("clearresume",    "🗑 Clear saved auto-resume checkpoint"),
         BotCommand("status",         "📊 Check copy job progress"),
         BotCommand("stopjob",        "⛔ Cancel the running copy job"),
+        BotCommand("skipscan",       "⏩ Skip destination pre-scan and start copying"),
         # ── Sync ──────────────────────────────────────────────────────────────
         BotCommand("sync",           "🔄 Start live auto-sync (new messages)"),
         BotCommand("stopsync",       "🔴 Stop the auto-sync"),
@@ -386,3 +388,4 @@ def build_app(token: str) -> Application:
     app.add_error_handler(error_handler)
 
     return app
+
