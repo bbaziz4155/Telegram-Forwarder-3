@@ -1094,7 +1094,7 @@ def _build_status_text(bot_data: dict) -> str:
         lines.append("🤖 *Userbot:* ❌ Not initialised")
 
     # Session-lost warning (set by bridge when copy was cancelled due to auth failure)
-    if bot_data.pop("session_lost_during_copy", False):
+    if bot_data.get("session_lost_during_copy", False):
         lines.append(
             "\n⚠️ *Copy job was stopped* because the Telegram session was revoked.\n"
             "Use /gensession to create a fresh session, then /copy to restart."
