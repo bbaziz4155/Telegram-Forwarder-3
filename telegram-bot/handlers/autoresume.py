@@ -1,6 +1,6 @@
 """
 Auto-resume state — persists the active copy-job to disk so the bot can
-restart it automatically if the process is killed (e.g. Replit going to sleep).
+restart it automatically if the process is killed (e.g. Railway redeploy).
 
 Lifecycle
 ---------
@@ -8,12 +8,22 @@ Lifecycle
   clear_resume()  called in _run_copy() finally — runs on normal finish OR
                   user /stopjob cancel; does NOT run if the process is killed,
                   which is exactly when we want the file to survive.
-  load_resume()   called once in schedule_auto_resume() at startup.
-  claim_resume()  atomic version of load_resume() — renames autoresume.json
-                  to autoresume.running.json so a second process starting
+  load_resume()   inspect-only read (does NOT claim); also checks
+                  autoresume.running.json so /setsource can detect and clear
+                  a resume that was already claimed at startup.
+  claim_resume()  atomic version — renames autoresume.json →
+                  autoresume.running.json so a second process starting
                   concurrently cannot also claim the same job (prevents
                   duplicate copies when the bot restarts more than once in
                   quick succession).
+
+Channel safety
+--------------
+  The src/dst stored in autoresume.json are ALWAYS the channels the user
+  last chose via /copy.  Do NOT override them with config.SOURCE_CHANNEL /
+  config.DEST_CHANNEL in schedule_auto_resume — those env-var values may be
+  stale.  Instead, /setsource and /setdest explicitly call clear_resume() to
+  wipe any pending resume whenever the user changes channels.
 """
 import json
 import logging
@@ -23,9 +33,9 @@ import time
 logger = logging.getLogger(__name__)
 
 # Respect DATA_DIR so autoresume.json lives on the same persistent volume
-# as channel_settings.json and checkpoints/ (prevents stale-channel on redeploy).
-_DATA_DIR    = os.environ.get("DATA_DIR",
-               os.path.join(os.path.dirname(__file__), "..", "data"))
+# as channel_settings.json and checkpoints/.
+_DATA_DIR     = os.environ.get("DATA_DIR",
+                os.path.join(os.path.dirname(__file__), "..", "data"))
 _RESUME_FILE  = os.path.join(_DATA_DIR, "autoresume.json")
 _RUNNING_FILE = os.path.join(_DATA_DIR, "autoresume.running.json")
 
@@ -104,8 +114,6 @@ def claim_resume() -> dict | None:
                 logger.info(
                     "Auto-resume: found stale .running.json (%.0fs old) — recovering.", age
                 )
-                # Rename back; if autoresume.json also somehow exists, remove
-                # the stale running file so we don't double-up.
                 if os.path.exists(_RESUME_FILE):
                     os.remove(_RUNNING_FILE)
                 else:
@@ -144,10 +152,15 @@ def claim_resume() -> dict | None:
 
 def load_resume() -> dict | None:
     """
-    Return the saved job state dict, or None if no resume is pending.
-    Use claim_resume() at startup instead — it prevents duplicate jobs when
-    the bot restarts more than once in quick succession.  load_resume() is
-    kept for callers that only need to inspect state without claiming it.
+    Inspect-only read — returns the saved job state dict, or None.
+
+    Checks autoresume.json first, then falls back to autoresume.running.json
+    (the file may already have been claimed/renamed at startup by claim_resume).
+    This lets callers like /setsource and /setdest detect and report a pending
+    resume even when the startup claim already happened.
+
+    Use claim_resume() at startup — NOT this function — to prevent duplicate
+    jobs when the bot restarts more than once in quick succession.
 
     Returned dict shape:
       {
@@ -157,6 +170,7 @@ def load_resume() -> dict | None:
         "opts": {
           "allowed_exts":        set[str],
           "caption_replacement": str,
+          "caption_suffix":      str,
           "notify_every":        int,
           "skip_text":           bool,
           "rate_delay":          float,
@@ -164,15 +178,17 @@ def load_resume() -> dict | None:
         }
       }
     """
-    try:
-        with open(_RESUME_FILE) as f:
-            data = json.load(f)
-        # Convert list back to set for the engine
-        data["opts"]["allowed_exts"] = set(data["opts"].get("allowed_exts", []))
-        return data
-    except FileNotFoundError:
-        return None
-    except (json.JSONDecodeError, KeyError, TypeError) as e:
-        logger.warning("Auto-resume: malformed state file (%s) — ignoring", e)
-        clear_resume()
-        return None
+    for path in (_RESUME_FILE, _RUNNING_FILE):
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            data["opts"]["allowed_exts"] = set(data["opts"].get("allowed_exts", []))
+            return data
+        except FileNotFoundError:
+            continue
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            logger.warning("Auto-resume: malformed state file %s (%s) — ignoring",
+                           os.path.basename(path), e)
+            clear_resume()
+            return None
+    return None
