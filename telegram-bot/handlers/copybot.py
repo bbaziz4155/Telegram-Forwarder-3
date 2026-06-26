@@ -2503,7 +2503,7 @@ async def schedule_auto_resume(application) -> None:
         application.bot_data[_AR_MISMATCH_KEY] = resume
         _ar.clear_resume()   # remove from disk; data is now in bot_data
         _mm_kb = InlineKeyboardMarkup([[
-            InlineKeyboardButton("↩️ Resume with saved channels", callback_data="ar_resume_saved"),
+            InlineKeyboardButton(f"↩️ Resume: {src} → {dst}", callback_data="ar_resume_saved"),
             InlineKeyboardButton("🚫 Cancel",                      callback_data="ar_cancel_saved"),
         ]])
         try:
