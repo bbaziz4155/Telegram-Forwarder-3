@@ -1016,7 +1016,9 @@ async def _run_dual_copy(client, client_2, src, dst, opts, bot, chat_id, status_
         tc, ts, tf = ca + cb, sa_ + sb_, fa_ + fb_
 
         if cancelled:
-            _ar.clear_resume()
+            # Preserve auto-resume if cancel came from /restart, not /stopjob
+            if not bot_data.get("__restarting"):
+                _ar.clear_resume()
             text = (
                 f"⛔ *Dual Copy Cancelled*\n\n"
                 f"👤 *Account A:* ✅`{ca:,}` ⏭`{sa_:,}` ❌`{fa_:,}`\n"
@@ -1123,6 +1125,10 @@ async def _run_copy(client, src, dst, opts, notifier, bot, chat_id, bot_data):
             prescan_skip_event=bot_data.get("prescan_skip_event"),
         )
     except asyncio.CancelledError:
+        # If the cancel came from /restart (not /stopjob), preserve the
+        # auto-resume file so the bot picks up the job after os.execv.
+        if bot_data.get("__restarting"):
+            _clear_resume = False
         # Edit the progress message to a clear "cancelled" state — do NOT call
         # notifier.done() here because that shows "✅ Copy Complete!" which is
         # misleading when the job was actually stopped by the user.
