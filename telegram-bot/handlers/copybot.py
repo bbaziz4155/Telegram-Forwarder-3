@@ -2398,7 +2398,21 @@ async def ar_cancel_saved_callback(update: Update, context: ContextTypes.DEFAULT
 
 
 async def _ar_launch_from_mismatch(chat_id: int, resume: dict, application) -> None:
-    """Launch a resumed job straight from the mismatch-override flow (skips guard)."""
+    """Launch a resumed job straight from the mismatch-override flow (skips guard).
+
+    The user explicitly chose the saved channels, so we update config to match
+    them before launching.  This ensures save_resume() writes the correct src/dst
+    back to autoresume.json, breaking the circular mismatch loop that would
+    otherwise repeat on every Railway restart.
+    """
+    import channel_settings as _cs
+    saved_src = resume.get("src")
+    saved_dst = resume.get("dst")
+    if saved_src:
+        config.SOURCE_CHANNEL = int(saved_src)
+    if saved_dst:
+        config.DEST_CHANNEL = int(saved_dst)
+    _cs.save()  # persist chosen channels so next restart matches autoresume.json
     loop     = asyncio.get_running_loop()
     deadline = loop.time() + 90
     while not bridge.is_ready(application.bot_data):
