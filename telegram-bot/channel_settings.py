@@ -40,13 +40,25 @@ def load():
 
 
 def save():
-    """Write the current config channel IDs to disk."""
+    """Write the current config channel IDs to disk.
+
+    Merges with the existing file so /setsource never overwrites a saved
+    dest with 0 (and vice-versa).  Only non-zero values are written.
+    """
     path = _path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    existing: dict = {}
+    try:
+        with open(path) as _rf:
+            existing = json.load(_rf)
+    except Exception:
+        pass
+    if config.SOURCE_CHANNEL:
+        existing["source"] = config.SOURCE_CHANNEL
+    if config.DEST_CHANNEL:
+        existing["dest"] = config.DEST_CHANNEL
     try:
         with open(path, "w") as f:
-            json.dump(
-                {"source": config.SOURCE_CHANNEL, "dest": config.DEST_CHANNEL}, f
-            )
+            json.dump(existing, f)
     except Exception as e:
         logger.warning("Could not save channel_settings.json: %s", e)
