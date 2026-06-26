@@ -47,6 +47,9 @@ async def restart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     bot_data = context.bot_data
 
     # ── 1. Cancel active copy / sync / clean jobs ──────────────────────────
+    # Signal handlers that this cancel is from /restart (not /stopjob) so
+    # they preserve the auto-resume file — the bot picks it up after execv.
+    bot_data["__restarting"] = True
     for key in ("active_copy_task", "active_sync_task", "active_cleancaptions_task", "active_purge_task"):
         task = bot_data.get(key)
         if task and not task.done():
