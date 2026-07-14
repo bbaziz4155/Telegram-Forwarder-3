@@ -1,0 +1,27 @@
+# Runs the Telegram Forwarder bot as an always-restarting background
+# service. Works the same on a Google Cloud free VM, Oracle Cloud free
+# VM, or any machine with Docker installed.
+#
+# Usage:
+#   1. cd into the repo root (where this file lives)
+#   2. cp telegram-bot/.env.example telegram-bot/.env   (then fill it in)
+#   3. docker compose up -d --build
+#
+# The "data" folder next to this file persists the dedup database,
+# copy checkpoints, and auto-resume state across restarts/reboots.
+
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - telegram-bot/.env
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    # Health check server the bot itself exposes on PORT (default 8080).
+    # Not required for the bot to work, kept for parity with the
+    # Render/Railway configs already in this repo.
+    ports:
+      - "8080:8080"
