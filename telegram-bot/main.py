@@ -1,6 +1,8 @@
 import logging
 import os
 import threading
+import time
+import urllib.request
 import warnings
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -40,27 +42,58 @@ def _start_health_server():
     thread.start()
 
 
+def _start_self_pinger():
+    """
+    Render free-tier services sleep after ~15 min with no inbound HTTP traffic.
+    This thread pings the app's own health endpoint every 10 minutes so it
+    never goes to sleep — no UptimeRobot or external service needed.
+
+    Only activates when RENDER_EXTERNAL_URL is set (Render injects this
+    automatically). On Railway, Google Cloud, or local runs this does nothing.
+    """
+    render_url = os.environ.get("RENDER_EXTERNAL_URL", "").rstrip("/")
+    if not render_url:
+        return  # not on Render — skip silently
+
+    ping_url = render_url + "/"
+    logger.info(f"Render self-pinger active → pinging {ping_url} every 10 min")
+
+    def _loop():
+        while True:
+            time.sleep(600)  # 10 minutes
+            try:
+                urllib.request.urlopen(ping_url, timeout=10)
+                logger.debug("Self-ping OK")
+            except Exception as exc:
+                logger.debug(f"Self-ping failed (non-fatal): {exc}")
+
+    t = threading.Thread(target=_loop, daemon=True)
+    t.start()
+
+
 def main():
-    # Start HTTP health server FIRST — before anything else so Railway's
-    # health check always gets a 200 OK regardless of bot startup state.
-    # On Replit this port may be unavailable; the server gracefully skips.
+    # Start HTTP health server FIRST so any platform health check gets a
+    # 200 OK immediately, before the bot itself finishes starting up.
     _start_health_server()
+
+    # Keep the Render free-tier service awake automatically — no external
+    # uptime monitor needed.
+    _start_self_pinger()
 
     # Support both BOT_TOKEN (Railway convention) and TELEGRAM_BOT_TOKEN
     token = os.environ.get("BOT_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN")
     if not token:
         logger.error(
             "Neither BOT_TOKEN nor TELEGRAM_BOT_TOKEN is set — bot will not start. "
-            "Set BOT_TOKEN in your Railway environment variables."
+            "Set BOT_TOKEN in your environment variables."
         )
         # Keep the process alive so the health check keeps passing
         threading.Event().wait()
         return
 
     # ── Startup syntax check ─────────────────────────────────────────────────
-    # Catches SyntaxErrors in any handler file before Railway's health check
-    # fails with a cryptic traceback. Runs AFTER the health server so Railway
-    # always gets a 200 OK even when a syntax error is found.
+    # Catches SyntaxErrors in any handler file before the platform's health
+    # check fails with a cryptic traceback.
     import ast as _ast, glob as _glob
     _bot_dir = os.path.dirname(os.path.abspath(__file__))
     _py_files = _glob.glob(os.path.join(_bot_dir, "**", "*.py"), recursive=True)
@@ -83,11 +116,8 @@ def main():
 
     app = build_app(token)
     logger.info("Starting Telegram Forwarder Bot...")
-    # drop_pending_updates=True: discard commands queued while the bot was
-    # offline so stale messages are never replayed on restart.
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 
 if __name__ == "__main__":
     main()
-
