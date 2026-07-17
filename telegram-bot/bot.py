@@ -21,6 +21,7 @@ import forwarder
 import userbot_bridge
 import channel_settings
 import config
+from userbot import backup as _backup
 from handlers import menu as menu_handler
 from handlers import rules as rules_handler
 from handlers import history as history_handler
@@ -104,7 +105,10 @@ async def post_init(application: Application):
     application.bot_data["admin_ids"] = admin_ids
     logger.info("Admin gate loaded: %d admin(s)", len(admin_ids))
 
-    # Schedule auto-resume check
+    # Start Telegram backup loop (restore on startup + periodic uploads)
+    asyncio.create_task(_backup.run_backup_loop(application.bot_data))
+
+    # Schedule auto-resume check (backup loop signals backup_restored when done)
     asyncio.create_task(copybot_handler.schedule_auto_resume(application))
 
     # ── Send "✅ Back online!" if this is a /restart recovery ─────────────────
@@ -372,6 +376,16 @@ def build_app(token: str) -> Application:
         app.add_handler(h)
 
     app.add_handler(CommandHandler("restart", restart_handler.restart_cmd))
+
+    async def _backup_cmd(update, context):
+        client = userbot_bridge.get_client(context.bot_data)
+        if not client or not userbot_bridge.is_ready(context.bot_data):
+            await update.message.reply_text("❌ Userbot not connected — cannot backup.")
+            return
+        msg = await update.message.reply_text("📦 Backing up data to Saved Messages…")
+        ok = await _backup.backup_now(client)
+        await msg.edit_text("✅ Backup uploaded to your Telegram Saved Messages." if ok else "⚠️ Backup failed — check logs.")
+    app.add_handler(CommandHandler("backup", _backup_cmd))
 
     app.add_handler(MessageHandler(filters.COMMAND, menu_handler.unknown_command))
     app.add_handler(

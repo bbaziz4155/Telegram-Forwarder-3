@@ -1052,6 +1052,14 @@ async def _run_dual_copy(client, client_2, src, dst, opts, bot, chat_id, status_
         bot_data.pop("active_copy_stats",   None)
         bot_data.pop("active_copy_stats_b", None)
         bot_data.pop("active_copy_delay",   None)
+        # Upload a fresh backup so state survives the next restart
+        try:
+            from userbot import backup as _bk
+            _client = bridge.get_client(bot_data)
+            if _client and bridge.is_ready(bot_data):
+                asyncio.create_task(_bk.backup_now(_client))
+        except Exception:
+            pass
 
 
 async def _run_dryrun(client, src, dst, opts, bot, chat_id, msg_id, bot_data):
@@ -1186,6 +1194,14 @@ async def _run_copy(client, src, dst, opts, notifier, bot, chat_id, bot_data):
         bot_data.pop("active_flood_wait",    None)
         bot_data.pop("active_copy_stats",    None)  # prevent stale stats on next job start
         bot_data.pop("active_copy_delay",    None)  # clear live speed override
+        # Upload a fresh backup so the completed checkpoint/dedup state survives a restart
+        try:
+            from userbot import backup as _bk
+            _client = bridge.get_client(bot_data)
+            if _client and bridge.is_ready(bot_data):
+                asyncio.create_task(_bk.backup_now(_client))
+        except Exception:
+            pass
 
 
 async def _run_sync(client, src, dst, opts, bot, chat_id, bot_data):
@@ -2494,6 +2510,15 @@ async def schedule_auto_resume(application) -> None:
     resume = _ar.claim_resume()
     if not resume:
         return  # nothing to resume — fast path
+
+    # Wait for the Telegram backup restore to finish before touching state.
+    # This ensures the dedup DB and checkpoint are fully restored first.
+    waited = 0
+    while not application.bot_data.get("backup_restored"):
+        if waited >= 60:
+            break   # don't block indefinitely if backup loop never signals
+        await asyncio.sleep(1)
+        waited += 1
 
     chat_id = resume.get("chat_id")
     src     = resume.get("src")
