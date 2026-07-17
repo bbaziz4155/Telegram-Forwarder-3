@@ -77,7 +77,7 @@ async def backup_now(client) -> bool:
         logger.info("Backup: data dir missing — nothing to upload")
         return False
     try:
-        zip_bytes = await asyncio.get_event_loop().run_in_executor(None, _zip_data_dir)
+        zip_bytes = await asyncio.get_running_loop().run_in_executor(None, _zip_data_dir)
         if len(zip_bytes) < 22:          # empty zip is 22 bytes
             logger.info("Backup: data dir is empty — skipping upload")
             return False
@@ -130,7 +130,7 @@ async def restore_from_telegram(client) -> bool:
             logger.warning("Backup: download returned empty — skipping restore")
             return False
 
-        await asyncio.get_event_loop().run_in_executor(None, _restore_zip, zip_bytes)
+        await asyncio.get_running_loop().run_in_executor(None, _restore_zip, zip_bytes)
         logger.info("Backup: restored %s bytes successfully ✓", f"{len(zip_bytes):,}")
         return True
     except Exception as exc:
