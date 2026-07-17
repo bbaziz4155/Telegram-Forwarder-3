@@ -27,6 +27,9 @@ logger = logging.getLogger(__name__)
 
 BACKUP_INTERVAL_SECS = int(os.environ.get("BACKUP_INTERVAL_SECS", "900"))  # 15 min default
 _BACKUP_TAG = "#tgforwarder_backup"  # unique tag so search finds it fast
+# Send backups to LOG_CHANNEL if set (bot must be admin there), else Saved Messages
+_log_ch_raw = os.environ.get("LOG_CHANNEL", "").strip()
+_BACKUP_DEST = int(_log_ch_raw) if _log_ch_raw else "me"
 
 _DEFAULT_DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 _DATA_DIR = os.environ.get("DATA_DIR", _DEFAULT_DATA_DIR)
@@ -87,7 +90,7 @@ async def backup_now(client) -> bool:
         buf.name = "forwarder_data.zip"
 
         await client.send_file(
-            "me",                         # Saved Messages
+            _BACKUP_DEST,
             buf,
             caption=(
                 f"{_BACKUP_TAG}\n"
@@ -113,7 +116,7 @@ async def restore_from_telegram(client) -> bool:
     try:
         logger.info("Backup: searching Saved Messages for latest backup…")
         found = None
-        async for msg in client.iter_messages("me", search=_BACKUP_TAG, limit=20):
+        async for msg in client.iter_messages(_BACKUP_DEST, search=_BACKUP_TAG, limit=20):
             if msg.document:
                 found = msg
                 break          # iter_messages returns newest first
