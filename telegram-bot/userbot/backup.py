@@ -27,8 +27,6 @@ logger = logging.getLogger(__name__)
 
 BACKUP_INTERVAL_SECS = int(os.environ.get("BACKUP_INTERVAL_SECS", "900"))  # 15 min default
 _BACKUP_TAG = "#tgforwarder_backup"  # unique tag so search finds it fast
-# Channel to send backups to. Defaults to Saved Messages ("me") if not set.
-_LOG_CHANNEL = os.environ.get("LOG_CHANNEL", "me").strip() or "me"
 
 _DEFAULT_DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 _DATA_DIR = os.environ.get("DATA_DIR", _DEFAULT_DATA_DIR)
@@ -89,7 +87,7 @@ async def backup_now(client) -> bool:
         buf.name = "forwarder_data.zip"
 
         await client.send_file(
-            _LOG_CHANNEL,
+            "me",                         # Saved Messages
             buf,
             caption=(
                 f"{_BACKUP_TAG}\n"
@@ -115,7 +113,7 @@ async def restore_from_telegram(client) -> bool:
     try:
         logger.info("Backup: searching Saved Messages for latest backup…")
         found = None
-        async for msg in client.iter_messages(_LOG_CHANNEL, search=_BACKUP_TAG, limit=20):
+        async for msg in client.iter_messages("me", search=_BACKUP_TAG, limit=20):
             if msg.document:
                 found = msg
                 break          # iter_messages returns newest first
@@ -178,6 +176,11 @@ async def run_backup_loop(bot_data: dict) -> None:
     await restore_from_telegram(client)
     bot_data["backup_restored"] = True   # signal: auto-resume may now proceed
     logger.info("Backup: restore complete — periodic backup every %ds", BACKUP_INTERVAL_SECS)
+    try:
+        from userbot import log_channel as _lc
+        asyncio.create_task(_lc.bot_started(client))
+    except Exception:
+        pass
 
     # ── Periodic backup loop ───────────────────────────────────────────────
     while True:

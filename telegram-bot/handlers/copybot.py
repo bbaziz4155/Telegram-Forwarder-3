@@ -878,6 +878,11 @@ async def _run_dual_copy(client, client_2, src, dst, opts, bot, chat_id, status_
 
     mid_id = max_msg_id // 2
     logger.info("Dual copy: max_msg_id=%d split at mid_id=%d", max_msg_id, mid_id)
+    try:
+        from userbot import log_channel as _lc
+        asyncio.create_task(_lc.copy_started(client, src, dst, opts))
+    except Exception:
+        pass
 
     # ── Initialise per-worker stats ───────────────────────────────────────────
     bot_data["active_copy_stats"]   = {"copied": 0, "skipped": 0, "failed": 0, "total": 0}
@@ -1052,12 +1057,18 @@ async def _run_dual_copy(client, client_2, src, dst, opts, bot, chat_id, status_
         bot_data.pop("active_copy_stats",   None)
         bot_data.pop("active_copy_stats_b", None)
         bot_data.pop("active_copy_delay",   None)
-        # Upload a fresh backup so state survives the next restart
+        # Log to channel + upload backup (ca/sa_/fa_/cb/sb_/fb_ captured above)
         try:
             from userbot import backup as _bk
-            _client = bridge.get_client(bot_data)
-            if _client and bridge.is_ready(bot_data):
-                asyncio.create_task(_bk.backup_now(_client))
+            from userbot import log_channel as _lc
+            _lc_client = bridge.get_client(bot_data)
+            if _lc_client and bridge.is_ready(bot_data):
+                asyncio.create_task(_lc.dual_copy_finished(
+                    _lc_client, src, dst,
+                    ca, sa_, fa_, cb, sb_, fb_,
+                    cancelled=cancelled,
+                ))
+                asyncio.create_task(_bk.backup_now(_lc_client))
         except Exception:
             pass
 
@@ -1120,6 +1131,11 @@ async def _run_copy(client, src, dst, opts, notifier, bot, chat_id, bot_data):
     bot_data["active_copy_delay"] = opts.get("rate_delay", _SPEED_CYCLE[0][1])
     _clear_resume = True   # set False on unexpected exception → keep file for auto-resume
     try:
+        try:
+            from userbot import log_channel as _lc
+            asyncio.create_task(_lc.copy_started(client, src, dst, opts))
+        except Exception:
+            pass
         await copy_channel_files(
             client, src, dst,
             allowed_exts=opts["allowed_exts"],
@@ -1184,6 +1200,12 @@ async def _run_copy(client, src, dst, opts, notifier, bot, chat_id, bot_data):
             except Exception:
                 pass
     finally:
+        # Capture stats before popping them so log_channel can report them
+        _fin_stats   = bot_data.get("active_copy_stats", {})
+        _fin_copied  = _fin_stats.get("copied",  0)
+        _fin_skipped = _fin_stats.get("skipped", 0)
+        _fin_failed  = _fin_stats.get("failed",  0)
+
         # Clear resume file on success or user /stopjob cancel.
         # On unexpected exceptions we keep it so the job auto-resumes on next boot.
         # (Does NOT run if the process is killed — the file survives in all kill cases.)
@@ -1194,12 +1216,17 @@ async def _run_copy(client, src, dst, opts, notifier, bot, chat_id, bot_data):
         bot_data.pop("active_flood_wait",    None)
         bot_data.pop("active_copy_stats",    None)  # prevent stale stats on next job start
         bot_data.pop("active_copy_delay",    None)  # clear live speed override
-        # Upload a fresh backup so the completed checkpoint/dedup state survives a restart
+        # Log to channel + upload backup
         try:
             from userbot import backup as _bk
-            _client = bridge.get_client(bot_data)
-            if _client and bridge.is_ready(bot_data):
-                asyncio.create_task(_bk.backup_now(_client))
+            from userbot import log_channel as _lc
+            _lc_client = bridge.get_client(bot_data)
+            if _lc_client and bridge.is_ready(bot_data):
+                asyncio.create_task(_lc.copy_finished(
+                    _lc_client, src, dst,
+                    _fin_copied, _fin_skipped, _fin_failed,
+                ))
+                asyncio.create_task(_bk.backup_now(_lc_client))
         except Exception:
             pass
 
